@@ -292,7 +292,9 @@ async def update_prefs(req: PrefsRequest, user=Depends(get_current_user)):
     upd = {}
     if req.dark_mode is not None:
         upd["dark_mode"] = req.dark_mode
-    if req.tier is not None and req.tier in ("standard", "pro", "enterprise"):
+    if req.tier is not None:
+        if req.tier not in ("standard", "pro", "enterprise"):
+            raise HTTPException(400, "Invalid tier")
         upd["tier"] = req.tier
     if upd:
         await db.users.update_one({"id": user["id"]}, {"$set": upd})
@@ -848,7 +850,7 @@ async def doc_status(doc_id: str, user=Depends(get_current_user)):
     }
 
 @api.get("/documents/{doc_id}/signed-pdf")
-async def get_signed_pdf(doc_id: str, user=Depends(get_current_user)):
+async def get_signed_pdf(doc_id: str, user=Depends(get_user_from_query_or_header)):
     """Sender or receiver can download the signed-doc PDF (text body + watermark)."""
     doc = await db.documents.find_one({"id": doc_id})
     if not doc:

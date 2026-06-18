@@ -1,54 +1,62 @@
-# Bachein — Product Requirements (MVP V1)
-
-## Vision
-Bachein is an AI-powered secure document creation, sharing, NDA execution, digital signing, and trust verification platform. Mobile-first (Expo / React Native) with FastAPI + MongoDB backend.
+# Bachein — PRD (v2: AI Chat + Real Email + File Upload + Face Verify)
 
 ## Stack
-- Frontend: Expo Router (React Native), TypeScript, react-native-svg, expo-audio, AsyncStorage
-- Backend: FastAPI, Motor (MongoDB), JWT auth (bcrypt), emergentintegrations (Gemini)
-- AI: Gemini 3 Flash (generation) + Gemini 3.1 Pro (legal review) via Emergent Universal LLM Key
+- Frontend: Expo Router (React Native), TypeScript, react-native-svg, expo-audio, expo-camera, expo-document-picker, expo-file-system
+- Backend: FastAPI, Motor (MongoDB), JWT auth (bcrypt), emergentintegrations (Gemini), Resend (HTTP API via httpx), pypdf, reportlab
+- AI: Gemini 3 Flash + Gemini 3.1 Pro via Emergent Universal LLM Key
+- Email: Resend API (test mode — only delivers to account holder until a custom domain is verified at resend.com/domains)
 
-## V1 Scope (Implemented)
-### Auth
+## Features (V2 — current)
+
+### Auth & Identity
 - JWT email/password signup + login
+- **Magic-link sign-in** (15-min token, email-delivered). Receivers auto-provisioned on first email click.
 - Token persisted via AsyncStorage
+- Dark-mode + tier preferences (standard/pro/enterprise)
 
 ### Sender flow
-- Home dashboard: list of created documents with status pill, stats, "Check Status" CTAs
-- Bottom-center Create FAB
-- Category picker (NDA, Patent/IP, Legal, Confidential, Financial, Org, Employment, Freelancer, Investor, Manufacturing, Secure PDF, Normal PDF)
-- Normal PDF: AI Generator using Gemini — picks sub-type (Question Paper, Report, etc), generates title + cover + content, save to vault
-- Secure flow: intent prompt → AI draft (with auto Legal Review showing missing clauses / risks / recommendations) → Security Configuration toggles → Recipient email → Send
-- Document detail screen with full status tracker (delivered/opened/OTP/voice/read%/signature/timestamp)
+- Home dashboard with stats, sticky create FAB, document list with auto-refreshing status
+- Category picker (12 categories)
+- Normal PDF: Gemini AI generator with sub-types (Question Paper, Report, Notes, …)
+- Secure flow: intent → AI draft → AI Legal Review (missing/risks/recommendations) → **Attach Files (PDF/DOCX/XLSX/PPTX/images)** with server-side parsing + AI auto-flagging (Patent / Source code / Financial / Research) → 13 Security Toggles → Recipient → Send
+- **Real email** to recipient with magic-link CTA (Resend integration)
+- Document detail with **live status tracker (4-s polling)** + downloadable Signed PDF + Audit Report (both with query-param JWT for in-app viewing)
 
 ### Receiver flow
-- Received tab listing assigned documents
-- Sequential verification wizard: Review → OTP (with demo OTP shown) → Voice Oath (record audio) → Digital Signature (SVG signature pad) → Confirmation → Unlocked Protected Content
-- Read progress auto-tracked via scroll
+- Magic-link landing → auto sign-in
+- Inbox tab listing assigned documents
+- Sequential verification: Review → OTP (emailed) → **Face verification (selfie via expo-camera)** → Voice Oath → **Signature (draw OR type)** → Confirmation → Unlocked Protected Content
+- Auto-tracks reading progress via scroll
+- Sender automatically receives "signed" notification email + dashboard reflects signed state without manual refresh
+
+### Bachein AI (tab — full chat)
+- Multi-turn streaming chat with Gemini
+- Attach PDF → backend extracts text via pypdf → AI summarizes/modifies/translates/extracts clauses
+- "Set password X on this PDF and email to friend@example.com" → AI emits ACTION_JSON → user taps "Send Email" → backend builds PDF (reportlab) → password-protects (pypdf) → sends via Resend
+- Persistent chat history per session; multiple sessions per user
 
 ### Evidence Vault
-- All signed documents (sent + received) with audit metadata
+- Signed sent + received with audit metadata
+- Audit PDF report download
+- Signed PDF (with watermark) download
 
-### Security Toggles (UI + persisted to config)
-OTP, Voice Oath, Digital Signature, Face Verification, Device Verification, Dynamic Watermark, Disable Download/Forwarding/Printing, Screenshot Detection, Geo Restriction, Time-Limited Viewing, Evidence Logging.
+## Endpoints (prefix /api)
+Auth: signup, login, me, prefs(PATCH), magic/request, magic/consume  
+AI: generate, review, chat, chat/sessions, chat/{id}, chat/action  
+Files: upload  
+Documents: CRUD, send-otp, verify-otp, face-verify, voice-oath, read-progress, sign, status, signed-pdf (token query), audit-pdf (token query), vault
 
-Backend enforces OTP and Voice Oath gates before signature when configured.
+## Email templates (Resend)
+- Welcome / Sign-in magic link
+- Document received (with magic-link CTA)
+- OTP code
+- Document signed (sender notification)
+- PDF attachment (from AI chat) with optional password
 
-## Out of Scope / Deferred
-- File upload (PDF/DOCX/PPTX/XLSX) attach + parsing — backend supports `attached_files` field but UI uploader deferred
-- Real face verification (mock simulated capture deferred)
-- Email/SMS for OTP delivery (currently returns demo OTP in API)
-- Watermarking PDF rendering
-- Geo / device restriction enforcement
+## Limitations
+- Resend free tier: emails ONLY deliver to the account-holder address (`emmran1empire@gmail.com`). To deliver to any recipient, verify a domain at resend.com/domains and update `RESEND_FROM` in `/app/backend/.env`. The endpoints return `sent:false` gracefully when this happens.
+- Face verification stores a captured selfie as evidence — no biometric match (no Face++ / AWS Rekognition wired in).
+- WhatsApp delivery (mentioned in spec) not yet wired.
 
-## API (prefix `/api`)
-- `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`
-- `GET /categories`
-- `POST /ai/generate`, `POST /ai/review`
-- `POST /documents`, `GET /documents/sent`, `GET /documents/received`, `GET /documents/{id}`
-- `POST /documents/{id}/send-otp`, `POST /documents/verify-otp`
-- `POST /documents/voice-oath`, `POST /documents/read-progress`, `POST /documents/sign`
-- `GET /documents/{id}/status`, `GET /vault`
-
-## Smart Business Enhancement (next)
-- Per-document verification level → premium tier (Standard / Pro Audit / Enterprise) drives revenue per signed envelope.
+## Revenue lever
+Tier system in place (standard/pro/enterprise). Pro = unlimited signed envelopes + audit PDF. Enterprise = priority routing + custom domain branding. UI surfacing deferred.
