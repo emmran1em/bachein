@@ -1,10 +1,10 @@
-import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
-import { api, getUser } from '@/src/api';
+import { api, getUser, getToken } from '@/src/api';
 
 function Row({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
   return (
@@ -40,6 +40,34 @@ export default function DocumentView() {
 
   useFocusEffect(useCallback(() => { load(); }, [id]));
 
+  // Poll status every 4s while screen is focused, until signed
+  useFocusEffect(useCallback(() => {
+    const t = setInterval(async () => {
+      try {
+        const st: any = await api.status(id!);
+        setStatus(st);
+        if (st?.signature_status === 'signed') {
+          // Also refresh doc once
+          api.getDocument(id!).then((d: any) => setDoc(d)).catch(() => {});
+        }
+      } catch {}
+    }, 4000);
+    return () => clearInterval(t);
+  }, [id]));
+
+  const openPdf = async (url: string) => {
+    try {
+      const token = await getToken();
+      // Most platforms only handle GET via Linking; append token? Easier: use fetch + blob on web; for mobile we open with auth header is not supported.
+      // For demo: just open URL (will fail if no auth) — instead use a temporary public-ish approach by appending token query param? Backend currently uses Authorization header only.
+      // Simple solution: copy URL to clipboard or use Share. Use Linking.openURL with token in URL — not safe but functional for preview.
+      const sep = url.includes('?') ? '&' : '?';
+      await Linking.openURL(`${url}${sep}token=${token}`);
+    } catch (e: any) {
+      // ignore
+    }
+  };
+
   if (loading || !doc) {
     return <SafeAreaView style={ss.container}><ActivityIndicator style={{ marginTop: 80 }} color={theme.colors.brand} /></SafeAreaView>;
   }
@@ -71,17 +99,39 @@ export default function DocumentView() {
 
         {isSender && doc.mode === 'secure' && (
           <View style={ss.statusCard} testID="status-card">
-            <Text style={ss.statusTitle}>Status Tracker</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={ss.statusTitle}>Status Tracker</Text>
+              {status?.signature_status === 'signed' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <View style={ss.liveDot} />
+                  <Text style={ss.liveText}>SIGNED</Text>
+                </View>
+              )}
+            </View>
             <View style={ss.divider} />
             <Row label="Recipient" value={doc.recipient_email || '—'} />
             <Row label="Delivered" value={status?.delivered ? 'Yes' : 'No'} ok={!!status?.delivered} />
             <Row label="Opened" value={status?.opened ? 'Yes' : 'No'} ok={!!status?.opened} />
             <Row label="OTP Verified" value={status?.otp_verified ? 'Yes' : 'Pending'} ok={!!status?.otp_verified} />
-            <Row label="Voice Oath" value={status?.voice_oath_completed ? 'Completed' : 'Pending'} ok={!!status?.voice_oath_completed} />
+            <Row label="Face Verified" value={status?.face_verified ? 'Yes' : (doc.security_config?.face_verification ? 'Pending' : '—')} ok={!!status?.face_verified} />
+            <Row label="Voice Oath" value={status?.voice_oath_completed ? 'Completed' : (doc.security_config?.voice_oath ? 'Pending' : '—')} ok={!!status?.voice_oath_completed} />
             <Row label="Agreement Read" value={`${status?.agreement_read_pct || 0}%`} ok={(status?.agreement_read_pct || 0) >= 80} />
             <Row label="Signature" value={status?.signature_status === 'signed' ? 'Signed' : 'Pending'} ok={status?.signature_status === 'signed'} />
             <Row label="Signed At" value={status?.signed_at ? new Date(status.signed_at).toLocaleString() : '—'} />
             <Row label="Content Unlocked" value={status?.protected_unlocked ? 'Yes' : 'Locked'} ok={!!status?.protected_unlocked} />
+
+            {status?.signature_status === 'signed' && (
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+                <Pressable testID="download-signed-pdf" style={ss.downloadBtn} onPress={() => openPdf(api.signedPdfUrl(doc.id))}>
+                  <Ionicons name="document-text-outline" size={14} color={theme.colors.brand} />
+                  <Text style={ss.downloadText}>Signed PDF</Text>
+                </Pressable>
+                <Pressable testID="download-audit-pdf" style={ss.downloadBtn} onPress={() => openPdf(api.auditPdfUrl(doc.id))}>
+                  <Ionicons name="receipt-outline" size={14} color={theme.colors.brand} />
+                  <Text style={ss.downloadText}>Audit Report</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
         )}
 
@@ -128,4 +178,8 @@ const ss = StyleSheet.create({
   rowValue: { color: theme.colors.brand, fontSize: 13, fontWeight: '500' },
   configRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   configText: { color: theme.colors.onSurfaceSecondary, fontSize: 13, textTransform: 'capitalize' },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.success },
+  liveText: { color: theme.colors.success, fontSize: 10, fontWeight: '500', letterSpacing: 0.5 },
+  downloadBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: theme.colors.borderStrong, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#fff' },
+  downloadText: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
 });

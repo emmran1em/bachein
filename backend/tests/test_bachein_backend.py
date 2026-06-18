@@ -7,13 +7,18 @@ Covers:
 - /api/documents/* full secure send → OTP → voice → sign flow
 - /api/vault
 """
+import os
 import time
 import uuid
 import base64
 import pytest
 import requests
+from pymongo import MongoClient
 
 BASE = None  # set via fixture
+
+_MONGO = MongoClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+_DB = _MONGO[os.environ.get("DB_NAME", "bachein_db")]
 
 
 def _url(path):
@@ -272,8 +277,10 @@ class TestDocumentsFlow:
         assert r.status_code == 200
         j = r.json()
         assert j.get("sent") is True
-        assert "otp_demo" in j and len(j["otp_demo"]) == 6
-        shared_state["otp"] = j["otp_demo"]
+        # OTP is emailed only; fetch from Mongo for tests
+        doc = _DB.documents.find_one({"id": doc_id})
+        assert doc and doc.get("otp_code") and len(doc["otp_code"]) == 6
+        shared_state["otp"] = doc["otp_code"]
 
     def test_verify_otp_wrong(self, api_client, shared_state):
         token = shared_state["bob_token"]

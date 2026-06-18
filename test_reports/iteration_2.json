@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 2 backend regression + EXPANDED endpoint testing for Bachein. 65/65 pytest cases passed (100%) on public URL https://nda-hub-1.preview.emergentagent.com/api. New coverage: Magic link request/consume (auto-create user, invalid token 404, used-token reuse blocked, 15-min token expiry honored via DB inspection), file upload (PDF text extraction working, 8MB cap, auth required), document creation with attached files (AI flags 'Patent-related' & 'Financial data' correctly auto-tagged), face verification (sets flag + audit entry, 403 for sender), full E2E sign flow with face+OTP+voice gates, signed-PDF download (header-auth returns valid %PDF bytes, 400 when unsigned), audit-PDF download (works pre-sign too, supports BOTH Bearer header AND ?token= query param), AI chat (plain, multi-turn persistence, PDF context with extracted-text injection has_pdf=true, ACTION_JSON detection + stripping from reply field), chat session list + history (ACTION_JSON stripped), chat/action send_pdf_email (account holder → sent:true, non-account-holder → sent:false gracefully without 500, password-protected PDF flag, invalid-email 400, unsupported action 400), and user prefs (dark_mode toggle, tier standard/pro/enterprise, invalid tier silently ignored — see minor note). All 34 prior tests still green after updating the legacy send-otp test to pull OTP from Mongo (the API no longer exposes otp_demo — OTP is delivered via email only, which is the correct production behavior).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/auth/prefs", "issue": "Invalid tier values (e.g. 'ultra') are silently dropped and the endpoint returns 200 with the previously-stored tier. Spec says it should 'reject invalid tier'. Recommend returning HTTP 400 with a clear message; otherwise clients have no way to know their value was discarded."},
+      {"endpoint": "GET /api/documents/{id}/signed-pdf", "issue": "Uses get_current_user dependency only — does NOT accept ?token= query param. The expanded spec/agent note requires ?token= support for in-app PDF viewing via Linking.openURL. Currently a Bearer header is mandatory; the audit-pdf sibling endpoint correctly uses get_user_from_query_or_header. Recommend swapping the dependency on this route too."},
+      {"endpoint": "POST /api/documents", "issue": "AI flags treat short tokens too broadly: 'function ', 'def ', 'import ' substrings will tag any HR doc that mentions 'function' as 'Source code'. Consider word-boundary regex."},
+      {"endpoint": "POST /api/documents/{id}/send-otp", "issue": "Response no longer exposes the OTP (correct for prod). Documenting because legacy test had to switch to Mongo lookup."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_endpoints.py",
+    "/app/backend/tests/test_bachein_backend.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/new_endpoints_results.xml"
+  ],
+  "action_items": [
+    "Fix signed-pdf endpoint to support ?token= query-param auth (mirror audit-pdf's get_user_from_query_or_header). Required for in-app PDF viewing via Linking.openURL on iOS/Android.",
+    "Return HTTP 400 (or at minimum a server-side warning + 422) when PATCH /api/auth/prefs receives an unknown tier value, instead of silently dropping it.",
+    "Tighten AI flag heuristics in POST /api/documents (word-boundary matching) to reduce false positives.",
+    "Optional: hide otp_code from any /documents response payloads and projection (already excluded in main reads — verified)."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew from 549 → 904 lines. Now well past the 700-line guideline; recommend splitting into routers/ (auth.py, ai.py, chat.py, documents.py, files.py) before next feature addition.",
+    "ACTION_JSON parsing in /ai/chat is fragile (regex-free, depends on rfind('}')) — works in practice but a malformed JSON will silently null `action`. Consider logging when parsing fails.",
+    "send_pdf_email payload accepts both 'body' and 'content' keys — undocumented. Either pick one or document both.",
+    "Magic-token expiry is compared as ISO strings (lexicographic). Works because all isoformat strings include timezone offset, but a future fmt change could break ordering — prefer parsing into datetime.",
+    "Pydantic .dict() still in use (line 617 model_dump is fine, but elsewhere — verified clean here). FastAPI on_event('shutdown') still deprecated (line 901) — pre-existing.",
+    "JWT_SECRET still default ('bachein-secret-key-change-in-production-2026') — must rotate before prod.",
+    "Resend free-tier 403 on non-account-holder is handled gracefully by send_email returning False — verified.",
+    "/upload stores entire file as base64 in Mongo (data_base64 field). With 8MB cap and base64 inflation (~10.7MB stored), this is fine for now but consider GridFS/S3 for production scale.",
+    "Face/voice/signature base64 payloads truncated to 500k chars in DB — sane safeguard."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_endpoints.py (created — 31 new tests across 8 classes)",
+    "/app/backend/tests/test_bachein_backend.py (updated — switched send-otp test from response field to Mongo lookup so legacy regression still works after API hardening)"
+  ],
+  "success_rate": {"backend": "100% (65/65)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "alice@bachein.com / Test1234! and bob@bachein.com / Test1234! ensured (idempotent signup-or-login). 3 ephemeral magic-link users created (magic-new-*, magic-consume-*, magic-used-*) for magic-link tests. Several test documents created (TEST_*) including 1 fully-signed NDA used for signed-pdf + audit-pdf checks. Chat sessions persisted in db.chat_messages.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully green (65/65). Run `pytest /app/backend/tests/ -v` to regress. New tests rely on pymongo direct read (MONGO_URL+DB_NAME) for OTP retrieval since the API no longer exposes it. Resend test-mode behavior verified: account holder emmran1empire@gmail.com receives sent:true, all other recipients return sent:false WITHOUT 500 — that is correct. Outstanding minor fixes: (1) ?token= on /signed-pdf, (2) reject-invalid-tier on /auth/prefs. Frontend (Expo web preview) testID coverage still un-validated — next iteration should mobile-viewport-test the new chat screen, file upload UI, face-verify camera flow, signed/audit PDF viewer, and dark-mode toggle.",
+  "rca_of_issue": "N/A — no failures. Note on legacy test fix: the prior backend revision returned an 'otp_demo' field in /documents/{id}/send-otp for testing; current code correctly removes it (OTP is delivered via Resend email only). Updated legacy test to query Mongo directly for the OTP so the test still validates the verify-otp flow without compromising prod safety."
+}

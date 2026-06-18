@@ -3,10 +3,12 @@ import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, ActivityIndic
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
-import { api } from '@/src/api';
+import { api, uploadFile } from '@/src/api';
 
-type Step = 'intent' | 'draft' | 'security' | 'recipient';
+type Step = 'intent' | 'draft' | 'attach' | 'security' | 'recipient';
 
 const TOGGLES: { key: string; label: string; sub: string }[] = [
   { key: 'otp_verification', label: 'OTP Verification', sub: 'Email/SMS one-time code before access' },
@@ -43,6 +45,23 @@ export default function SecureCreate() {
   const [recipient, setRecipient] = useState('');
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState('');
+  const [attached, setAttached] = useState<Array<{ name: string; type: string; size: number; extracted_text?: string }>>([]);
+  const [uploading, setUploading] = useState(false);
+
+  const pickAndUpload = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'image/*'],
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled) return;
+      const asset = res.assets[0];
+      setUploading(true);
+      const up: any = await uploadFile({ uri: asset.uri, name: asset.name, type: asset.mimeType || 'application/octet-stream' });
+      setAttached(prev => [...prev, { name: up.filename, type: up.content_type, size: up.size, extracted_text: up.extracted_text_preview }]);
+    } catch (e: any) { setErr('Upload failed: ' + e.message); }
+    finally { setUploading(false); }
+  };
 
   const draftDoc = async () => {
     setErr(''); setLoading(true);
@@ -70,6 +89,7 @@ export default function SecureCreate() {
         content: draft.content,
         recipient_email: recipient.trim() || undefined,
         security_config: config,
+        attached_files: attached,
       });
       router.replace(`/document/${doc.id}`);
     } catch (e: any) { setErr(e.message); } finally { setSending(false); }
@@ -79,7 +99,7 @@ export default function SecureCreate() {
     <SafeAreaView style={s.container} edges={['top']} testID="create-secure-screen">
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={s.header}>
-          <Pressable onPress={() => step === 'intent' ? router.back() : setStep(step === 'recipient' ? 'security' : step === 'security' ? 'draft' : 'intent')} style={s.closeBtn} testID="back-button">
+          <Pressable onPress={() => step === 'intent' ? router.back() : setStep(step === 'recipient' ? 'security' : step === 'security' ? 'attach' : step === 'attach' ? 'draft' : 'intent')} style={s.closeBtn} testID="back-button">
             <Ionicons name="chevron-back" size={22} color={theme.colors.brand} />
           </Pressable>
           <Text style={s.eyebrow}>{category} • SECURE</Text>
@@ -131,7 +151,42 @@ export default function SecureCreate() {
                 </View>
               )}
 
-              <Pressable testID="goto-security-btn" style={s.primaryBtn} onPress={() => setStep('security')}>
+              <Pressable testID="goto-security-btn" style={s.primaryBtn} onPress={() => setStep('attach')}>
+                <Text style={s.primaryBtnText}>Continue to Attach Files</Text>
+                <Ionicons name="arrow-forward" size={16} color={theme.colors.onBrandPrimary} />
+              </Pressable>
+            </>
+          )}
+
+          {step === 'attach' && (
+            <>
+              <Text style={s.title}>Attach Protected Files</Text>
+              <Text style={s.subtitle}>Optional. Upload PDFs, Word, Excel, PPT, images, source-code archives. Bachein AI will auto-scan for sensitive content.</Text>
+              <Pressable testID="pick-file-btn" style={s.secondaryBtn} onPress={pickAndUpload} disabled={uploading}>
+                {uploading ? <ActivityIndicator color={theme.colors.brand} /> : (
+                  <>
+                    <Ionicons name="cloud-upload-outline" size={16} color={theme.colors.brand} />
+                    <Text style={s.secondaryBtnText}>Upload file</Text>
+                  </>
+                )}
+              </Pressable>
+              {attached.length > 0 && (
+                <View style={{ marginTop: 14 }}>
+                  {attached.map((f, i) => (
+                    <View key={i} style={s.fileRow} testID={`file-row-${i}`}>
+                      <Ionicons name="document" size={16} color={theme.colors.brand} />
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={s.fileName} numberOfLines={1}>{f.name}</Text>
+                        <Text style={s.fileMeta}>{Math.round(f.size / 1024)} KB</Text>
+                      </View>
+                      <Pressable testID={`remove-file-${i}`} onPress={() => setAttached(prev => prev.filter((_, j) => j !== i))}>
+                        <Ionicons name="close" size={18} color={theme.colors.muted} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+              <Pressable testID="goto-security-btn-2" style={s.primaryBtn} onPress={() => setStep('security')}>
                 <Text style={s.primaryBtnText}>Continue to Security</Text>
                 <Ionicons name="arrow-forward" size={16} color={theme.colors.onBrandPrimary} />
               </Pressable>
@@ -220,4 +275,7 @@ const s = StyleSheet.create({
   toggleSub: { color: theme.colors.muted, fontSize: 12, marginTop: 2 },
   confirmBox: { flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: '#EAF3EE', borderRadius: 12, padding: 14, marginTop: 16 },
   confirmText: { color: theme.colors.onSurfaceSecondary, flex: 1, fontSize: 13, lineHeight: 18 },
+  fileRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 8 },
+  fileName: { color: theme.colors.brand, fontSize: 13, fontWeight: '500' },
+  fileMeta: { color: theme.colors.muted, fontSize: 11 },
 });

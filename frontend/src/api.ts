@@ -5,22 +5,26 @@ const API = `${BASE}/api`;
 
 const TOKEN_KEY = 'bachein_token';
 const USER_KEY = 'bachein_user';
+const PREFS_KEY = 'bachein_prefs';
 
-export async function setToken(token: string) {
-  await AsyncStorage.setItem(TOKEN_KEY, token);
-}
-export async function getToken(): Promise<string | null> {
-  return AsyncStorage.getItem(TOKEN_KEY);
-}
-export async function setUser(user: any) {
-  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
-}
+export async function setToken(token: string) { await AsyncStorage.setItem(TOKEN_KEY, token); }
+export async function getToken(): Promise<string | null> { return AsyncStorage.getItem(TOKEN_KEY); }
+export async function setUser(user: any) { await AsyncStorage.setItem(USER_KEY, JSON.stringify(user)); }
 export async function getUser(): Promise<any | null> {
   const raw = await AsyncStorage.getItem(USER_KEY);
   return raw ? JSON.parse(raw) : null;
 }
-export async function clearAuth() {
-  await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+export async function clearAuth() { await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, PREFS_KEY]); }
+
+export async function setPref(k: string, v: any) {
+  const raw = await AsyncStorage.getItem(PREFS_KEY);
+  const all = raw ? JSON.parse(raw) : {};
+  all[k] = v;
+  await AsyncStorage.setItem(PREFS_KEY, JSON.stringify(all));
+}
+export async function getPrefs(): Promise<any> {
+  const raw = await AsyncStorage.getItem(PREFS_KEY);
+  return raw ? JSON.parse(raw) : {};
 }
 
 async function request<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -41,17 +45,32 @@ async function request<T = any>(path: string, opts: RequestInit = {}): Promise<T
   return data as T;
 }
 
+export const BACKEND = BASE;
+export const API_BASE = API;
+
 export const api = {
   signup: (email: string, password: string, name: string) =>
     request('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => request('/auth/me'),
+  updatePrefs: (prefs: { dark_mode?: boolean; tier?: string }) =>
+    request('/auth/prefs', { method: 'PATCH', body: JSON.stringify(prefs) }),
+  magicRequest: (email: string) =>
+    request('/auth/magic/request', { method: 'POST', body: JSON.stringify({ email }) }),
+  magicConsume: (token: string) =>
+    request('/auth/magic/consume', { method: 'POST', body: JSON.stringify({ token }) }),
   categories: () => request('/categories'),
   generate: (body: { prompt: string; category: string; sub_type?: string }) =>
     request('/ai/generate', { method: 'POST', body: JSON.stringify(body) }),
   review: (document_text: string) =>
     request('/ai/review', { method: 'POST', body: JSON.stringify({ document_text }) }),
+  chat: (body: { session_id?: string; message: string; pdf_context?: string }) =>
+    request('/ai/chat', { method: 'POST', body: JSON.stringify(body) }),
+  chatSessions: () => request('/ai/chat/sessions'),
+  chatSession: (id: string) => request(`/ai/chat/${id}`),
+  chatAction: (body: { session_id: string; action: string; payload: any }) =>
+    request('/ai/chat/action', { method: 'POST', body: JSON.stringify(body) }),
   createDocument: (body: any) =>
     request('/documents', { method: 'POST', body: JSON.stringify(body) }),
   listSent: () => request('/documents/sent'),
@@ -60,6 +79,8 @@ export const api = {
   sendOtp: (id: string) => request(`/documents/${id}/send-otp`, { method: 'POST' }),
   verifyOtp: (document_id: string, otp: string) =>
     request('/documents/verify-otp', { method: 'POST', body: JSON.stringify({ document_id, otp }) }),
+  faceVerify: (document_id: string, image_base64: string) =>
+    request('/documents/face-verify', { method: 'POST', body: JSON.stringify({ document_id, image_base64 }) }),
   voiceOath: (document_id: string, audio_base64: string) =>
     request('/documents/voice-oath', { method: 'POST', body: JSON.stringify({ document_id, audio_base64 }) }),
   readProgress: (document_id: string, progress: number) =>
@@ -68,4 +89,23 @@ export const api = {
     request('/documents/sign', { method: 'POST', body: JSON.stringify({ document_id, signature_base64 }) }),
   status: (id: string) => request(`/documents/${id}/status`),
   vault: () => request('/vault'),
+  signedPdfUrl: (id: string) => `${API}/documents/${id}/signed-pdf`,
+  auditPdfUrl: (id: string) => `${API}/documents/${id}/audit-pdf`,
 };
+
+export async function uploadFile(file: { uri: string; name: string; type: string }): Promise<any> {
+  const token = await getToken();
+  const form = new FormData();
+  // @ts-ignore RN FormData
+  form.append('file', { uri: file.uri, name: file.name, type: file.type });
+  const res = await fetch(`${API}/upload`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form as any,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt);
+  }
+  return res.json();
+}
