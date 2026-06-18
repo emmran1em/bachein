@@ -1,22 +1,28 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "Bachein",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "bachein",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Record voice oath for secure document access",
+        "NSCameraUsageDescription": "Verify identity with face capture",
+        "NSPhotoLibraryUsageDescription": "Attach documents from your library"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": ["RECORD_AUDIO", "CAMERA"]
     },
     "web": {
       "bundler": "metro",
@@ -31,10 +37,16 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000"
+          "backgroundColor": "#FAFAF9"
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Bachein to record voice oaths."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

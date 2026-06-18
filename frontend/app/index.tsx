@@ -1,30 +1,28 @@
-import { Text, View, StyleSheet, Image } from "react-native";
-
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { useEffect } from 'react';
+import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
+import { useRouter } from 'expo-router';
+import { getToken } from '@/src/api';
+import { theme } from '@/src/theme';
 
 export default function Index() {
-  console.log(EXPO_PUBLIC_BACKEND_URL, "EXPO_PUBLIC_BACKEND_URL");
-
+  const router = useRouter();
+  useEffect(() => {
+    (async () => {
+      const t = await getToken();
+      if (t) router.replace('/(tabs)');
+      else router.replace('/(auth)/login');
+    })();
+  }, []);
   return (
-    <View style={styles.container}>
-      <Image
-        source={require("../assets/images/app-image.png")}
-        style={styles.image}
-      />
+    <View style={styles.container} testID="splash-screen">
+      <Text style={styles.brand}>bachein</Text>
+      <Text style={styles.tag}>Secure. Signed. Verified.</Text>
+      <ActivityIndicator color={theme.colors.brand} style={{ marginTop: 24 }} />
     </View>
   );
 }
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0c0c0c",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  image: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
-  },
+  container: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface },
+  brand: { fontSize: 40, fontWeight: '500', color: theme.colors.brand, letterSpacing: -1.5 },
+  tag: { color: theme.colors.muted, fontSize: 13, marginTop: 8, letterSpacing: 1 },
 });

@@ -1,0 +1,45 @@
+{
+  "summary": "First backend test pass for Bachein. 34/34 pytest cases passed (100%) covering health, categories, auth (signup/login/me with valid+invalid+duplicate cases), AI generation & legal review via Gemini through Emergent LLM key, and the full secure document lifecycle: create (secure+normal), list sent/received, open tracking, 3rd-party 403, OTP gate, send-otp, verify-otp (wrong+correct), voice-oath gate, voice-oath submit, read-progress persistence, signature, status tracker, vault for both sender and receiver, and 404 on unknown document. All tests run against public EXPO_PUBLIC_BACKEND_URL (https://nda-hub-1.preview.emergentagent.com/api). No backend issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/documents", "issue": "When mode='normal' but recipient_email is provided, security_config is forced to None yet status='sent' — recipient receives an unguarded document. Behaviour is intentional per current spec but worth documenting; consider warning the sender in UI."},
+      {"endpoint": "POST /api/documents/verify-otp wrong-otp test", "issue": "Wrong OTP test uses '000000' which has a 1-in-1M collision chance with the real OTP. Test gracefully skips if collision occurs. Not a backend bug."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_bachein_backend.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "None for backend. Frontend integration testing recommended next.",
+    "Optional hardening (not blocking): consider rate-limiting /api/auth/login and /api/documents/{id}/send-otp; consider invalidating prior OTP on resend (already does — verified)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 549 lines — close to the 700-line threshold but still manageable; consider splitting into routers/ (auth, ai, documents) before adding more endpoints.",
+    "JWT_SECRET in backend/.env is a placeholder ('bachein-secret-key-change-in-production-2026') — fine for preview, must be rotated for production.",
+    "OTP returned in API response (otp_demo) is documented as demo-only — ensure removal before production or gated behind an env flag.",
+    "Pydantic .dict() is deprecated in Pydantic v2 (line 352). Prefer .model_dump(). Not failing tests but emits deprecation warnings.",
+    "FastAPI @app.on_event('shutdown') (line 547) is deprecated; recommend migrating to lifespan context manager.",
+    "All MongoDB queries correctly exclude _id via projection. UUID used as primary key — good.",
+    "Sender cannot trigger send-otp (correctly returns 403) — verified.",
+    "Sign endpoint correctly enforces OTP and voice gates when security_config flags are true — verified."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (created)",
+    "/app/backend/tests/test_bachein_backend.py (created)"
+  ],
+  "success_rate": {"backend": "100% (34/34)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Created/ensured users alice@bachein.com and bob@bachein.com via signup-or-login helper (idempotent). One ephemeral stranger user created per run for 403 test. Documents created: 1 secure NDA (signed end-to-end) and 1 normal draft. All test docs prefixed with 'TEST_'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully green. Frontend (Expo web preview) is bundling on localhost:3000 — see /var/log/supervisor/expo.out.log. Test users alice@bachein.com and bob@bachein.com both exist with password Test1234!. Public base URL: https://nda-hub-1.preview.emergentagent.com. To re-run backend regression: `cd /app/backend && pytest tests/ -v`. Frontend testID coverage has not been validated yet — next agent should mobile-viewport-test the signup/login → dashboard → create secure doc → recipient open → OTP → voice → sign flow.",
+  "rca_of_issue": "N/A — no failures."
+}
