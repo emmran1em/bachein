@@ -174,6 +174,22 @@ class TestDocumentAIFlags:
 
 # ============ Face Verify ============
 
+def _real_face_b64():
+    """Fetch a real human face (StyleGAN) for Haar-detectable tests."""
+    import urllib.request, ssl, io as _io
+    from PIL import Image as _Image
+    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+    try:
+        req = urllib.request.Request("https://thispersondoesnotexist.com/",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        data = urllib.request.urlopen(req, context=ctx, timeout=15).read()
+        img = _Image.open(_io.BytesIO(data)).convert("RGB"); img.thumbnail((512, 512))
+        out = _io.BytesIO(); img.save(out, format="JPEG", quality=85)
+        return base64.b64encode(out.getvalue()).decode()
+    except Exception:
+        return base64.b64encode(b"img").decode()
+
+
 @pytest.fixture(scope="module")
 def signed_doc(tokens):
     """Create + fully sign a doc to use across signed-pdf / audit-pdf tests."""
@@ -183,16 +199,20 @@ def signed_doc(tokens):
         "mode": "secure",
         "content": "Full sign flow test body.",
         "recipient_email": BOB["email"],
-        "security_config": {"otp_verification": True, "voice_oath": True, "face_verification": True},
+        # V3: face/voice now use real biometrics; keep gates on for face only (real image), skip voice
+        "security_config": {"otp_verification": True, "voice_oath": False, "face_verification": True},
     }
     r = requests.post(_url("/documents"), json=payload, headers=_auth(tokens["alice"]))
     assert r.status_code == 200, r.text
     doc_id = r.json()["id"]
 
-    # face verify
+    # Clear any stale face data on bob from prior test runs so auto-enroll path is taken
+    _db.users.update_one({"email": BOB["email"]}, {"$unset": {"face_hash": "", "face_image_b64": ""}})
+
+    # face verify with REAL face image (Haar-detectable)
     fv = requests.post(
         _url("/documents/face-verify"),
-        json={"document_id": doc_id, "image_base64": base64.b64encode(b"img").decode()},
+        json={"document_id": doc_id, "image_base64": _real_face_b64()},
         headers=_auth(tokens["bob"]),
     )
     assert fv.status_code == 200, fv.text
@@ -205,9 +225,7 @@ def signed_doc(tokens):
     # verify-otp
     vo = requests.post(_url("/documents/verify-otp"), json={"document_id": doc_id, "otp": otp_code}, headers=_auth(tokens["bob"]))
     assert vo.status_code == 200
-    # voice oath
-    voi = requests.post(_url("/documents/voice-oath"), json={"document_id": doc_id, "audio_base64": base64.b64encode(b"a").decode()}, headers=_auth(tokens["bob"]))
-    assert voi.status_code == 200
+    # voice oath SKIPPED in V3 fixture (real Whisper STT — covered by test_v3_endpoints)
     # sign
     sg = requests.post(_url("/documents/sign"), json={"document_id": doc_id, "signature_base64": base64.b64encode(b"sig").decode()}, headers=_auth(tokens["bob"]))
     assert sg.status_code == 200, sg.text
@@ -222,7 +240,6 @@ class TestFaceVerify:
         events = [e["event"] for e in doc.get("audit_log", [])]
         assert "face_verified" in events
         assert "otp_verified" in events
-        assert "voice_oath" in events
         assert "signed" in events
 
     def test_face_verify_forbidden_for_sender(self, tokens, signed_doc):

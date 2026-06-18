@@ -18,12 +18,16 @@ import random
 import asyncio
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+import httpx
 
 from email_service import (
     email_doc_received, email_otp, email_signed_notification,
     email_magic_link, email_pdf_attachment,
 )
 from pdf_utils import extract_text_from_pdf, password_protect_pdf, text_to_pdf, audit_report_pdf
+from file_tools import convert as ft_convert, compress_image, compress_pdf, detect_format, SUPPORTED_INPUTS, SUPPORTED_OUTPUTS
+from voice_match import transcribe_and_match, EXPECTED_OATH
+from face_match import compute_face_hash, match as face_match_compare, detect_face, _decode_image
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -108,7 +112,7 @@ class DocumentCreate(BaseModel):
     category: str
     mode: str  # "normal" or "secure"
     content: str = ""
-    recipient_email: Optional[EmailStr] = None
+    recipient_email: Optional[EmailStr] = Field(default=None)
     security_config: Optional[SecurityConfig] = None
     attached_files: Optional[List[Dict[str, Any]]] = None
 
@@ -176,6 +180,15 @@ class ChatActionRequest(BaseModel):
 class PrefsRequest(BaseModel):
     dark_mode: Optional[bool] = None
     tier: Optional[str] = None
+
+class GoogleAuthRequest(BaseModel):
+    session_id: str
+
+class ConvertRequest(BaseModel):
+    pass  # not used (multipart)
+
+class FaceEnrollRequest(BaseModel):
+    image_base64: str
 
 # ============== Auth helpers ==============
 
@@ -286,6 +299,60 @@ async def login(req: LoginRequest):
 @api.get("/auth/me", response_model=UserOut)
 async def me(user=Depends(get_current_user)):
     return user_out(user)
+
+@api.post("/auth/google/session", response_model=AuthResponse)
+async def google_session(req: GoogleAuthRequest):
+    """Exchange Emergent OAuth session_id for Bachein JWT."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": req.session_id},
+            )
+            if r.status_code != 200:
+                raise HTTPException(401, "Invalid session")
+            data = r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Auth error: {e}")
+    email = (data.get("email") or "").lower()
+    name = data.get("name") or email.split("@")[0]
+    picture = data.get("picture")
+    if not email:
+        raise HTTPException(400, "Google account has no email")
+    user = await db.users.find_one({"email": email})
+    if not user:
+        user_id = str(uuid.uuid4())
+        user = {
+            "id": user_id, "email": email, "name": name,
+            "password_hash": hash_password(secrets.token_urlsafe(16)),
+            "created_at": now_iso(),
+            "tier": "standard", "dark_mode": False,
+            "picture": picture, "auth_provider": "google",
+        }
+        await db.users.insert_one(user)
+    else:
+        await db.users.update_one({"id": user["id"]}, {"$set": {"name": name, "picture": picture, "auth_provider": "google"}})
+        user = {**user, "name": name, "picture": picture, "auth_provider": "google"}
+    token = create_token(user["id"], user["email"])
+    return AuthResponse(token=token, user=user_out(user))
+
+
+@api.post("/auth/face/enroll")
+async def enroll_face(req: FaceEnrollRequest, user=Depends(get_current_user)):
+    h = compute_face_hash(req.image_base64)
+    if not h:
+        raise HTTPException(400, "No face detected. Please retake with your face clearly visible.")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"face_hash": h, "face_image_b64": req.image_base64[:500000]}})
+    return {"enrolled": True}
+
+
+@api.get("/auth/face/status")
+async def face_status(user=Depends(get_current_user)):
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "face_hash": 1})
+    return {"enrolled": bool(u and u.get("face_hash"))}
+
 
 @api.patch("/auth/prefs", response_model=UserOut)
 async def update_prefs(req: PrefsRequest, user=Depends(get_current_user)):
@@ -615,6 +682,8 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
 
 @api.post("/documents", response_model=DocumentOut)
 async def create_document(req: DocumentCreate, bg: BackgroundTasks, user=Depends(get_current_user)):
+    if req.mode == "secure" and not req.recipient_email:
+        raise HTTPException(400, "Recipient email is required for secure documents.")
     doc_id = str(uuid.uuid4())
     sec = (req.security_config or SecurityConfig()).model_dump() if req.mode == "secure" else None
     attached = req.attached_files or []
@@ -754,16 +823,30 @@ async def face_verify(req: FaceVerifyRequest, user=Depends(get_current_user)):
         raise HTTPException(404, "Not found")
     if doc.get("recipient_email") != user["email"]:
         raise HTTPException(403, "Forbidden")
+    # Real biometric match: compare against enrolled face_hash if user has one
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "face_hash": 1, "face_image_b64": 1})
+    ref_b64 = (u or {}).get("face_image_b64", "")
+    matched, distance, has_face = face_match_compare(ref_b64, req.image_base64)
+    if not has_face:
+        raise HTTPException(400, "No face detected in selfie. Please retake.")
+    if not matched and ref_b64:
+        raise HTTPException(400, f"Face does not match your enrolled profile (distance={distance}). Please retake.")
+    # Auto-enroll if first time
+    if not ref_b64:
+        h = compute_face_hash(req.image_base64)
+        if h:
+            await db.users.update_one({"id": user["id"]}, {"$set": {"face_hash": h, "face_image_b64": req.image_base64[:500000]}})
     await db.documents.update_one(
         {"id": req.document_id},
         {"$set": {
             "face_verified": True,
             "face_image_b64": req.image_base64[:500000],
+            "face_distance": int(distance),
             "updated_at": now_iso(),
          },
-         "$push": {"audit_log": {"event": "face_verified", "ts": now_iso(), "by": user["email"]}}}
+         "$push": {"audit_log": {"event": "face_verified", "ts": now_iso(), "by": user["email"], "distance": int(distance)}}}
     )
-    return {"verified": True}
+    return {"verified": True, "distance": int(distance)}
 
 @api.post("/documents/voice-oath")
 async def voice_oath(req: VoiceOathRequest, user=Depends(get_current_user)):
@@ -772,16 +855,22 @@ async def voice_oath(req: VoiceOathRequest, user=Depends(get_current_user)):
         raise HTTPException(404, "Not found")
     if doc.get("recipient_email") != user["email"]:
         raise HTTPException(403, "Forbidden")
+    # Real STT match
+    matched, sim, transcript = await transcribe_and_match(req.audio_base64)
+    if not matched:
+        raise HTTPException(400, f"Voice oath does not match required statement. Heard: \"{transcript[:200]}\" (similarity={sim:.2f}). Please re-record.")
     await db.documents.update_one(
         {"id": req.document_id},
         {"$set": {
             "voice_oath_completed": True,
             "voice_oath_audio": req.audio_base64[:500000],
+            "voice_transcript": transcript,
+            "voice_similarity": round(sim, 3),
             "updated_at": now_iso(),
          },
-         "$push": {"audit_log": {"event": "voice_oath", "ts": now_iso(), "by": user["email"]}}}
+         "$push": {"audit_log": {"event": "voice_oath", "ts": now_iso(), "by": user["email"], "similarity": round(sim, 3)}}}
     )
-    return {"completed": True}
+    return {"completed": True, "transcript": transcript, "similarity": round(sim, 3)}
 
 @api.post("/documents/read-progress")
 async def read_progress(req: ReadProgressRequest, user=Depends(get_current_user)):
@@ -888,6 +977,54 @@ async def vault(user=Depends(get_current_user)):
         {"_id": 0, "otp_code": 0, "signature_base64": 0, "voice_oath_audio": 0, "face_image_b64": 0}
     ).sort("signed_at", -1).to_list(500)
     return {"sent": sent, "received": received}
+
+# ---------- File Tools ----------
+
+@api.get("/file-tools/formats")
+async def file_tools_formats():
+    return {"inputs": SUPPORTED_INPUTS, "outputs": SUPPORTED_OUTPUTS}
+
+@api.post("/file-tools/convert")
+async def file_convert(target: str = Form(...), file: UploadFile = File(...), user=Depends(get_current_user)):
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "File too large (max 10MB)")
+    src = detect_format(file.filename or "") or (file.content_type or "").split("/")[-1]
+    if not src:
+        raise HTTPException(400, "Could not detect input format")
+    try:
+        out_bytes, content_type, filename = ft_convert(data, src, target, title=(file.filename or "document").rsplit(".", 1)[0])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return Response(content=out_bytes, media_type=content_type, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Detected-Format": src,
+        "X-Target-Format": target,
+    })
+
+@api.post("/file-tools/compress-image")
+async def file_compress_image(quality: int = Form(60), file: UploadFile = File(...), user=Depends(get_current_user)):
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "File too large (max 10MB)")
+    out_bytes, mime = compress_image(data, quality=quality)
+    return Response(content=out_bytes, media_type=mime, headers={
+        "Content-Disposition": f'attachment; filename="compressed-{(file.filename or "image").rsplit(".",1)[0]}.jpg"',
+        "X-Original-Size": str(len(data)),
+        "X-Compressed-Size": str(len(out_bytes)),
+    })
+
+@api.post("/file-tools/compress-pdf")
+async def file_compress_pdf(file: UploadFile = File(...), user=Depends(get_current_user)):
+    data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(413, "File too large (max 20MB)")
+    out_bytes = compress_pdf(data)
+    return Response(content=out_bytes, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="compressed-{(file.filename or "doc").rsplit(".",1)[0]}.pdf"',
+        "X-Original-Size": str(len(data)),
+        "X-Compressed-Size": str(len(out_bytes)),
+    })
 
 # Include
 app.include_router(api)

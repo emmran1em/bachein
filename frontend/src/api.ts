@@ -49,6 +49,12 @@ export const BACKEND = BASE;
 export const API_BASE = API;
 
 export const api = {
+  googleSession: (session_id: string) =>
+    request('/auth/google/session', { method: 'POST', body: JSON.stringify({ session_id }) }),
+  enrollFace: (image_base64: string) =>
+    request('/auth/face/enroll', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
+  faceStatus: () => request('/auth/face/status'),
+  fileFormats: () => request('/file-tools/formats'),
   signup: (email: string, password: string, name: string) =>
     request('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
@@ -108,4 +114,32 @@ export async function uploadFile(file: { uri: string; name: string; type: string
     throw new Error(txt);
   }
   return res.json();
+}
+
+export async function fileToolUpload(endpoint: string, file: { uri: string; name: string; type: string }, extraFields: Record<string, string> = {}): Promise<{ blobUri: string; headers: any; filename: string; contentType: string }> {
+  const token = await getToken();
+  const form = new FormData();
+  for (const [k, v] of Object.entries(extraFields)) form.append(k, v);
+  // @ts-ignore RN FormData
+  form.append('file', { uri: file.uri, name: file.name, type: file.type });
+  const res = await fetch(`${API}${endpoint}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form as any,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt || `Request failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const dispo = res.headers.get('content-disposition') || '';
+  const m = dispo.match(/filename="?([^"]+)"?/);
+  const filename = m ? m[1] : 'download';
+  const blobUri = URL.createObjectURL ? URL.createObjectURL(blob) : '';
+  return { blobUri, headers: {
+    original: res.headers.get('x-original-size'),
+    compressed: res.headers.get('x-compressed-size'),
+    detected: res.headers.get('x-detected-format'),
+    target: res.headers.get('x-target-format'),
+  }, filename, contentType: res.headers.get('content-type') || 'application/octet-stream' };
 }

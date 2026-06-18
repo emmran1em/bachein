@@ -13,7 +13,34 @@
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Record voice oath for secure document access",
         "NSCameraUsageDescription": "Verify identity with face capture",
-        "NSPhotoLibraryUsageDescription": "Attach documents from your library"
+        "NSPhotoLibraryUsageDescription": "Attach documents from your library",
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PDF Document",
+            "LSItemContentTypes": ["com.adobe.pdf"],
+            "LSHandlerRank": "Alternate"
+          },
+          {
+            "CFBundleTypeName": "Microsoft Word",
+            "LSItemContentTypes": ["org.openxmlformats.wordprocessingml.document", "com.microsoft.word.doc"],
+            "LSHandlerRank": "Alternate"
+          },
+          {
+            "CFBundleTypeName": "Microsoft Excel",
+            "LSItemContentTypes": ["org.openxmlformats.spreadsheetml.sheet", "com.microsoft.excel.xls"],
+            "LSHandlerRank": "Alternate"
+          },
+          {
+            "CFBundleTypeName": "Microsoft PowerPoint",
+            "LSItemContentTypes": ["org.openxmlformats.presentationml.presentation", "com.microsoft.powerpoint.ppt"],
+            "LSHandlerRank": "Alternate"
+          },
+          {
+            "CFBundleTypeName": "Image",
+            "LSItemContentTypes": ["public.image"],
+            "LSHandlerRank": "Alternate"
+          }
+        ]
       }
     },
     "android": {
@@ -22,7 +49,30 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["RECORD_AUDIO", "CAMERA"]
+      "permissions": ["RECORD_AUDIO", "CAMERA"],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["DEFAULT", "BROWSABLE"],
+          "data": [
+            { "mimeType": "application/pdf" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+            { "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
+            { "mimeType": "image/*" },
+            { "mimeType": "text/plain" }
+          ]
+        },
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [
+            { "mimeType": "application/pdf" },
+            { "mimeType": "application/*" },
+            { "mimeType": "image/*" }
+          ]
+        }
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -46,7 +96,9 @@
         {
           "microphonePermission": "Allow Bachein to record voice oaths."
         }
-      ]
+      ],
+      "expo-web-browser",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true

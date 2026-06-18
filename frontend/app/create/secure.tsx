@@ -80,6 +80,10 @@ export default function SecureCreate() {
 
   const send = async () => {
     if (!draft) return;
+    if (!recipient.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient.trim())) {
+      setErr('Recipient email is required and must be valid.');
+      return;
+    }
     setSending(true); setErr('');
     try {
       const doc: any = await api.createDocument({
@@ -224,10 +228,10 @@ export default function SecureCreate() {
             <>
               <Text style={s.title}>Send to recipient</Text>
               <Text style={s.subtitle}>Enter the recipient's email. They will receive a notification and complete verification before viewing.</Text>
-              <Text style={s.label}>Recipient email</Text>
+              <Text style={s.label}>Recipient email *</Text>
               <TextInput
                 testID="recipient-email-input"
-                style={s.input}
+                style={[s.input, err && !recipient ? { borderColor: theme.colors.error } : null]}
                 value={recipient}
                 onChangeText={setRecipient}
                 autoCapitalize="none"
