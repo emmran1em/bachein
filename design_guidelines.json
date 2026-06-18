@@ -1,0 +1,151 @@
+{
+  "app_name": "Bachein",
+  "personality": "5 Brutalist Mobile with 1 iOS-Native Clean warmth",
+  "personality_one_liner": "A high-trust, monochrome enterprise utility combining sharp asymmetric layouts with clean typography and absolute clarity.",
+  "color": {
+    "surface": "#FAFAF9",
+    "onSurface": "#1C1C1A",
+    "surfaceSecondary": "#F0F0EE",
+    "onSurfaceSecondary": "#4A4A46",
+    "surfaceTertiary": "#E5E5E2",
+    "onSurfaceTertiary": "#6B6B66",
+    "surfaceInverse": "#1C1C1A",
+    "onSurfaceInverse": "#FAFAF9",
+    "brand": "#1C1C1A",
+    "brandPrimary": "#1C1C1A",
+    "onBrandPrimary": "#FAFAF9",
+    "brandSecondary": "#D35230",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E5E5E2",
+    "onBrandTertiary": "#1C1C1A",
+    "success": "#3A6B4C",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D9882B",
+    "onWarning": "#FFFFFF",
+    "error": "#D35230",
+    "onError": "#FFFFFF",
+    "info": "#4A4A46",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E5E2",
+    "borderStrong": "#C2C2BE",
+    "divider": "#E5E5E2"
+  },
+  "typography": {
+    "displayFontFamily": "Satoshi",
+    "textFontFamily": "Satoshi",
+    "scale": { "sm": 12, "base": 14, "lg": 16, "xl": 20, "2xl": 24 }
+  },
+  "spacing": {
+    "rule": "Generous asymmetric rhythms; strict use of safe areas; tight grouping of related metadata and generous padding around main content blocks.",
+    "xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24, "2xl": 32, "3xl": 48
+  },
+  "radius_tokens": { "sm": 6, "md": 12, "lg": 20, "pill": 999 },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Use frosted glass on the bottom tab bar.",
+      "Use frosted glass on the sticky header when scrolling through the document list.",
+      "Apply glass overlay on sticky FAB or bottom action containers."
+    ],
+    "dont's": [
+      "Never blur document content or form fields.",
+      "Do not use glass on simple list items or cards."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home (Sender Dashboard)",
+      "purpose": "A minimal, commanding view of all active and pending secure documents.",
+      "states": {
+        "loading": "Centered minimal spinner with 'Syncing vault...'",
+        "empty": "Illustration of an empty folder with 'No documents yet. Create one securely.' and a primary CTA.",
+        "error": "Failed to load documents message with 'Retry Connection' button."
+      },
+      "layout": "Top section: Workspace switcher (Sender/Receiver) and subtle Profile avatar. Main area: Vertical list of documents using asymmetric staggered cards, displaying File Name, Creation Date, Status pill, and Check Status button. Bottom center: Floating FAB for 'Create File' nested inside or above a frosted glass tab bar. Bottom right: AI Assistant floating icon."
+    },
+    {
+      "name": "Create File Picker",
+      "purpose": "Bottom sheet or dedicated screen to select the document category.",
+      "states": {
+        "loading": "Spinner",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Grid of minimal icon tiles (NDA, Patent, Legal, Financial, Secure PDF, Normal PDF). Clean borders, no shadows. Emphasize 'Secure PDF' vs 'Normal PDF (AI)' with subtle brandSecondary accent."
+    },
+    {
+      "name": "Security Configuration",
+      "purpose": "Dense but legible settings screen to toggle enterprise-grade security rules.",
+      "states": {
+        "loading": "Skeleton of toggles",
+        "empty": "N/A",
+        "error": "Failed to save configuration."
+      },
+      "layout": "A scrollable list of security toggles (OTP, Face Verification, Voice Oath, Digital Signature, Dynamic Watermark, Geo Restriction, etc.). Grouped by category (Identity, Access, Tracking). Use right-aligned toggles. Explain sensitive features with muted small text below the label. Sticky 'Save & Continue' primary CTA at the bottom inside a frosted glass container."
+    },
+    {
+      "name": "Receiver Verification Flow",
+      "purpose": "A step-by-step wizard to unlock protected content.",
+      "states": {
+        "loading": "Verifying identity...",
+        "empty": "N/A",
+        "error": "Verification failed. Retry step."
+      },
+      "layout": "Full-screen sequential steps (OTP -> Face -> Voice -> Review -> Sign). One dominant action per screen. Large, bold typography for the step instruction. Camera preview for face/voice steps. Digital Signature pad at the end. Final confirmation unlocks the 'Protected Content' view."
+    },
+    {
+      "name": "Evidence Vault",
+      "purpose": "Audit trail and secure storage of all agreements and verification records.",
+      "states": {
+        "loading": "Loading audit logs...",
+        "empty": "Minimalist folder image. 'Vault is secure and empty.'",
+        "error": "Could not retrieve evidence records."
+      },
+      "layout": "List of records (Agreements, Logs, Signatures). Each row shows deep metadata (timestamps, encryption status) using a monospaced text variant for numbers to emphasize auditability. Tap to expand into a detailed 'Status Tracker' showing completion percentages."
+    }
+  ],
+  "images": {
+    "hero_bg": {
+      "url": "https://images.unsplash.com/photo-1595411425732-e69c1abe2763?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwYWJzdHJhY3QlMjBnZW9tZXRyaWMlMjB0ZXh0dXJlfGVufDB8fHx8MTc4MTc5OTk5NHww&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.pexels.com/photos/12082933/pexels-photo-12082933.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Abstract minimalist geometric texture"
+    },
+    "avatar_sender": {
+      "url": "https://images.unsplash.com/photo-1758613654360-45f1ff78c0cf?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0JTIwY2xlYW4lMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4MTc5OTk5NHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Sender professional headshot"
+    },
+    "avatar_receiver": {
+      "url": "https://images.unsplash.com/photo-1781271780434-2a5ae98a3515?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0JTIwY2xlYW4lMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4MTc5OTk5NHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Receiver professional headshot"
+    },
+    "empty_vault": {
+      "url": "https://images.pexels.com/photos/8947698/pexels-photo-8947698.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Minimalist plain cardboard folder"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette: Near-black and warm off-white for a high-trust, Linear/Notion-style enterprise SaaS aesthetic. Do not introduce blues or purples.",
+    "Utilize asymmetric layouts for the document list: staggered cards or uneven spacing to create a dynamic, modern composition.",
+    "Typography must be sharp and web-friendly (Satoshi preferred). Limit font sizes to a strict scale and use weight sparingly (max 500) to convey hierarchy.",
+    "Implement the sticky 'Create' FAB above the bottom tab bar. Use `react-native-safe-area-context` to ensure it avoids the home indicator.",
+    "The Security Configuration screen must use clear toggle switches with explanatory subtext for sensitive features to align with mobile security best practices found during web search.",
+    "Receiver Verification Flow should feel highly sequential and focused. Use full-screen modals for each step (OTP, Face, Voice) with large typography.",
+    "Ensure the Evidence Vault feels like an audit trail. Use Monospaced fonts for timestamps and IDs to reinforce the 'secure, enterprise-grade' feeling.",
+    "Apply frosted glass selectively on sticky headers and the bottom tab bar to provide depth over scrolling content, but never over actual document contents."
+  ]
+}
