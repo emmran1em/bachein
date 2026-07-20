@@ -1,62 +1,37 @@
-# Bachein — PRD (v2: AI Chat + Real Email + File Upload + Face Verify)
+# Bachein — PRD (v3: Google Auth + File Kit + Real Biometrics + Voice Match)
 
 ## Stack
-- Frontend: Expo Router (React Native), TypeScript, react-native-svg, expo-audio, expo-camera, expo-document-picker, expo-file-system
-- Backend: FastAPI, Motor (MongoDB), JWT auth (bcrypt), emergentintegrations (Gemini), Resend (HTTP API via httpx), pypdf, reportlab
-- AI: Gemini 3 Flash + Gemini 3.1 Pro via Emergent Universal LLM Key
-- Email: Resend API (test mode — only delivers to account holder until a custom domain is verified at resend.com/domains)
+- Frontend: Expo Router (RN), TypeScript, react-native-svg, expo-audio, expo-camera, expo-document-picker, expo-web-browser
+- Backend: FastAPI, Motor (MongoDB), JWT, bcrypt, emergentintegrations (Gemini), Resend, pypdf, reportlab, pdf2docx, python-docx, openpyxl, python-pptx, Pillow, opencv-python (face detect + hash), httpx (Whisper)
+- AI: Gemini 3 Flash + Gemini 3.1 Pro (drafting/review), OpenAI Whisper-1 via Emergent Universal Key (voice STT match)
+- Email: Resend (test mode — only delivers to `emmran1empire@gmail.com` until domain verified)
 
-## Features (V2 — current)
+## V3 Features
+- **Google sign-in** (Emergent OAuth) button on login screen
+- **File Kit tab** — Image Compressor (Pillow), PDF Compressor (pypdf), Document Converter (PDF/DOCX/XLSX/PPTX/TXT/MD/JPG/PNG/WEBP → PDF/TXT/DOCX/JPG/PNG/WEBP). PDF↔DOCX uses `pdf2docx` for layout preservation.
+- **Real face match** — OpenCV Haar cascade face detection + perceptual hash comparison. Auto-enrolls on first verification, then compares against enrolled hash on subsequent verifications. Distance logged in audit trail.
+- **Real voice oath match** — Whisper-1 transcription + fuzzy token overlap similarity ≥ 0.5 threshold. Backend rejects mismatched oaths with actual transcript in error.
+- **Mandatory recipient email** — enforced both frontend and backend for secure documents.
+- **File-open intent filters** — app.json declares Android `intentFilters` and iOS `CFBundleDocumentTypes` so Bachein appears in "Open with…" for PDF/DOCX/XLSX/PPTX/images (works after build, not in Expo Go).
+- **Real emails, magic links, live-status polling, signed & audit PDF downloads, AI chat with PDF attach + email action** — all carried over from V2.
 
-### Auth & Identity
-- JWT email/password signup + login
-- **Magic-link sign-in** (15-min token, email-delivered). Receivers auto-provisioned on first email click.
-- Token persisted via AsyncStorage
-- Dark-mode + tier preferences (standard/pro/enterprise)
+## Endpoints (V3 additions)
+- `POST /api/auth/google/session` — exchange Emergent OAuth session_id → Bachein JWT
+- `POST /api/auth/face/enroll` — save perceptual face hash
+- `GET /api/auth/face/status`
+- `GET /api/file-tools/formats`
+- `POST /api/file-tools/convert` (multipart, `target` form field)
+- `POST /api/file-tools/compress-image` (multipart, `quality`)
+- `POST /api/file-tools/compress-pdf` (multipart)
 
-### Sender flow
-- Home dashboard with stats, sticky create FAB, document list with auto-refreshing status
-- Category picker (12 categories)
-- Normal PDF: Gemini AI generator with sub-types (Question Paper, Report, Notes, …)
-- Secure flow: intent → AI draft → AI Legal Review (missing/risks/recommendations) → **Attach Files (PDF/DOCX/XLSX/PPTX/images)** with server-side parsing + AI auto-flagging (Patent / Source code / Financial / Research) → 13 Security Toggles → Recipient → Send
-- **Real email** to recipient with magic-link CTA (Resend integration)
-- Document detail with **live status tracker (4-s polling)** + downloadable Signed PDF + Audit Report (both with query-param JWT for in-app viewing)
+Voice/Face endpoints now perform real ML matching, not stub storage.
 
-### Receiver flow
-- Magic-link landing → auto sign-in
-- Inbox tab listing assigned documents
-- Sequential verification: Review → OTP (emailed) → **Face verification (selfie via expo-camera)** → Voice Oath → **Signature (draw OR type)** → Confirmation → Unlocked Protected Content
-- Auto-tracks reading progress via scroll
-- Sender automatically receives "signed" notification email + dashboard reflects signed state without manual refresh
+## Testing
+- Backend V3: 80/82 PASS (97.6%). 2 pre-existing minor issues addressed post-report (signed-pdf `?token=` and prefs tier validation).
 
-### Bachein AI (tab — full chat)
-- Multi-turn streaming chat with Gemini
-- Attach PDF → backend extracts text via pypdf → AI summarizes/modifies/translates/extracts clauses
-- "Set password X on this PDF and email to friend@example.com" → AI emits ACTION_JSON → user taps "Send Email" → backend builds PDF (reportlab) → password-protects (pypdf) → sends via Resend
-- Persistent chat history per session; multiple sessions per user
-
-### Evidence Vault
-- Signed sent + received with audit metadata
-- Audit PDF report download
-- Signed PDF (with watermark) download
-
-## Endpoints (prefix /api)
-Auth: signup, login, me, prefs(PATCH), magic/request, magic/consume  
-AI: generate, review, chat, chat/sessions, chat/{id}, chat/action  
-Files: upload  
-Documents: CRUD, send-otp, verify-otp, face-verify, voice-oath, read-progress, sign, status, signed-pdf (token query), audit-pdf (token query), vault
-
-## Email templates (Resend)
-- Welcome / Sign-in magic link
-- Document received (with magic-link CTA)
-- OTP code
-- Document signed (sender notification)
-- PDF attachment (from AI chat) with optional password
-
-## Limitations
-- Resend free tier: emails ONLY deliver to the account-holder address (`emmran1empire@gmail.com`). To deliver to any recipient, verify a domain at resend.com/domains and update `RESEND_FROM` in `/app/backend/.env`. The endpoints return `sent:false` gracefully when this happens.
-- Face verification stores a captured selfie as evidence — no biometric match (no Face++ / AWS Rekognition wired in).
-- WhatsApp delivery (mentioned in spec) not yet wired.
-
-## Revenue lever
-Tier system in place (standard/pro/enterprise). Pro = unlimited signed envelopes + audit PDF. Enterprise = priority routing + custom domain branding. UI surfacing deferred.
+## Known limitations
+- Resend free tier — universal delivery requires domain verification
+- GitHub sign-in not wired (needs GitHub OAuth app credentials from user)
+- Document converter for PPTX/XLSX → PDF extracts text only (not full layout); PDF↔DOCX uses pdf2docx layout engine
+- Face match uses Haar + perceptual hash (lightweight); AWS Rekognition CompareFaces would be more accurate but requires AWS keys
+- File-open intent filters only activate in EAS build, not in Expo Go

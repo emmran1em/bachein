@@ -17,31 +17,45 @@
         "CFBundleDocumentTypes": [
           {
             "CFBundleTypeName": "PDF Document",
-            "LSItemContentTypes": ["com.adobe.pdf"],
+            "LSItemContentTypes": [
+              "com.adobe.pdf"
+            ],
             "LSHandlerRank": "Alternate"
           },
           {
             "CFBundleTypeName": "Microsoft Word",
-            "LSItemContentTypes": ["org.openxmlformats.wordprocessingml.document", "com.microsoft.word.doc"],
+            "LSItemContentTypes": [
+              "org.openxmlformats.wordprocessingml.document",
+              "com.microsoft.word.doc"
+            ],
             "LSHandlerRank": "Alternate"
           },
           {
             "CFBundleTypeName": "Microsoft Excel",
-            "LSItemContentTypes": ["org.openxmlformats.spreadsheetml.sheet", "com.microsoft.excel.xls"],
+            "LSItemContentTypes": [
+              "org.openxmlformats.spreadsheetml.sheet",
+              "com.microsoft.excel.xls"
+            ],
             "LSHandlerRank": "Alternate"
           },
           {
             "CFBundleTypeName": "Microsoft PowerPoint",
-            "LSItemContentTypes": ["org.openxmlformats.presentationml.presentation", "com.microsoft.powerpoint.ppt"],
+            "LSItemContentTypes": [
+              "org.openxmlformats.presentationml.presentation",
+              "com.microsoft.powerpoint.ppt"
+            ],
             "LSHandlerRank": "Alternate"
           },
           {
             "CFBundleTypeName": "Image",
-            "LSItemContentTypes": ["public.image"],
+            "LSItemContentTypes": [
+              "public.image"
+            ],
             "LSHandlerRank": "Alternate"
           }
         ]
-      }
+      },
+      "bundleIdentifier": "com.emergent.ndahub.db887a"
     },
     "android": {
       "adaptiveIcon": {
@@ -49,30 +63,57 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["RECORD_AUDIO", "CAMERA"],
+      "permissions": [
+        "RECORD_AUDIO",
+        "CAMERA"
+      ],
       "intentFilters": [
         {
           "action": "VIEW",
-          "category": ["DEFAULT", "BROWSABLE"],
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ],
           "data": [
-            { "mimeType": "application/pdf" },
-            { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
-            { "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
-            { "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
-            { "mimeType": "image/*" },
-            { "mimeType": "text/plain" }
+            {
+              "mimeType": "application/pdf"
+            },
+            {
+              "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            },
+            {
+              "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            },
+            {
+              "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            },
+            {
+              "mimeType": "image/*"
+            },
+            {
+              "mimeType": "text/plain"
+            }
           ]
         },
         {
           "action": "SEND",
-          "category": ["DEFAULT"],
+          "category": [
+            "DEFAULT"
+          ],
           "data": [
-            { "mimeType": "application/pdf" },
-            { "mimeType": "application/*" },
-            { "mimeType": "image/*" }
+            {
+              "mimeType": "application/pdf"
+            },
+            {
+              "mimeType": "application/*"
+            },
+            {
+              "mimeType": "image/*"
+            }
           ]
         }
-      ]
+      ],
+      "package": "com.emergent.ndahub.db887a"
     },
     "web": {
       "bundler": "metro",
