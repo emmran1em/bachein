@@ -165,7 +165,7 @@ def convert(data: bytes, src_ext: str, target_ext: str, title: str = "Document")
     raise ValueError(f"Cannot convert .{src} to .{tgt}")
 
 
-def compress_image(data: bytes, quality: int = 60, max_dimension: int = 1600) -> Tuple[bytes, str]:
+def compress_image(data: bytes, quality: int = 30, max_dimension: int = 2400) -> Tuple[bytes, str]:
     img = Image.open(io.BytesIO(data))
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -173,7 +173,7 @@ def compress_image(data: bytes, quality: int = 60, max_dimension: int = 1600) ->
         ratio = max_dimension / max(img.size)
         img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)))
     bio = io.BytesIO()
-    img.save(bio, format="JPEG", quality=max(20, min(95, quality)), optimize=True)
+    img.save(bio, format="JPEG", quality=max(10, min(95, quality)), optimize=True, progressive=True)
     return bio.getvalue(), "image/jpeg"
 
 

@@ -987,8 +987,6 @@ async def file_tools_formats():
 @api.post("/file-tools/convert")
 async def file_convert(target: str = Form(...), file: UploadFile = File(...), user=Depends(get_current_user)):
     data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(413, "File too large (max 10MB)")
     src = detect_format(file.filename or "") or (file.content_type or "").split("/")[-1]
     if not src:
         raise HTTPException(400, "Could not detect input format")
@@ -1003,11 +1001,9 @@ async def file_convert(target: str = Form(...), file: UploadFile = File(...), us
     })
 
 @api.post("/file-tools/compress-image")
-async def file_compress_image(quality: int = Form(60), file: UploadFile = File(...), user=Depends(get_current_user)):
+async def file_compress_image(quality: int = Form(30), file: UploadFile = File(...), user=Depends(get_current_user)):
     data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(413, "File too large (max 10MB)")
-    out_bytes, mime = compress_image(data, quality=quality)
+    out_bytes, mime = compress_image(data, quality=quality, max_dimension=2400)
     return Response(content=out_bytes, media_type=mime, headers={
         "Content-Disposition": f'attachment; filename="compressed-{(file.filename or "image").rsplit(".",1)[0]}.jpg"',
         "X-Original-Size": str(len(data)),
@@ -1017,8 +1013,6 @@ async def file_compress_image(quality: int = Form(60), file: UploadFile = File(.
 @api.post("/file-tools/compress-pdf")
 async def file_compress_pdf(file: UploadFile = File(...), user=Depends(get_current_user)):
     data = await file.read()
-    if len(data) > 20 * 1024 * 1024:
-        raise HTTPException(413, "File too large (max 20MB)")
     out_bytes = compress_pdf(data)
     return Response(content=out_bytes, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="compressed-{(file.filename or "doc").rsplit(".",1)[0]}.pdf"',

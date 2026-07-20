@@ -116,7 +116,7 @@ export async function uploadFile(file: { uri: string; name: string; type: string
   return res.json();
 }
 
-export async function fileToolUpload(endpoint: string, file: { uri: string; name: string; type: string }, extraFields: Record<string, string> = {}): Promise<{ blobUri: string; headers: any; filename: string; contentType: string }> {
+export async function fileToolUpload(endpoint: string, file: { uri: string; name: string; type: string }, extraFields: Record<string, string> = {}): Promise<{ blobUri: string; base64?: string; headers: any; filename: string; contentType: string }> {
   const token = await getToken();
   const form = new FormData();
   for (const [k, v] of Object.entries(extraFields)) form.append(k, v);
@@ -128,18 +128,37 @@ export async function fileToolUpload(endpoint: string, file: { uri: string; name
     body: form as any,
   });
   if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(txt || `Request failed (${res.status})`);
+    let msg = `Request failed (${res.status})`;
+    try {
+      const txt = await res.text();
+      try { const j = JSON.parse(txt); msg = j.detail || j.message || txt; } catch { msg = txt || msg; }
+    } catch {}
+    throw new Error(msg);
   }
-  const blob = await res.blob();
+  const contentType = res.headers.get('content-type') || 'application/octet-stream';
   const dispo = res.headers.get('content-disposition') || '';
   const m = dispo.match(/filename="?([^"]+)"?/);
   const filename = m ? m[1] : 'download';
-  const blobUri = URL.createObjectURL ? URL.createObjectURL(blob) : '';
-  return { blobUri, headers: {
+  const headers = {
     original: res.headers.get('x-original-size'),
     compressed: res.headers.get('x-compressed-size'),
     detected: res.headers.get('x-detected-format'),
     target: res.headers.get('x-target-format'),
-  }, filename, contentType: res.headers.get('content-type') || 'application/octet-stream' };
+  };
+  const blob = await res.blob();
+  let blobUri = '';
+  let base64: string | undefined;
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    blobUri = URL.createObjectURL(blob);
+  } else {
+    // React Native: read blob as data URL
+    const reader = new FileReader();
+    base64 = await new Promise<string>((resolve, reject) => {
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    blobUri = base64;
+  }
+  return { blobUri, base64, headers, filename, contentType };
 }

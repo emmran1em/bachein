@@ -19,6 +19,7 @@ export default function FileKit() {
   const [detected, setDetected] = useState<string>('');
   const [err, setErr] = useState('');
   const [showTargetMenu, setShowTargetMenu] = useState(false);
+  const [quality, setQuality] = useState(20); // lower = more aggressive compression
 
   useEffect(() => { api.fileFormats().then((f: any) => setFormats(f)).catch(() => {}); }, []);
 
@@ -43,7 +44,7 @@ export default function FileKit() {
     try {
       let out;
       if (tool === 'image-compress') {
-        out = await fileToolUpload('/file-tools/compress-image', picked, { quality: '60' });
+        out = await fileToolUpload('/file-tools/compress-image', picked, { quality: String(quality) });
       } else if (tool === 'pdf-compress') {
         out = await fileToolUpload('/file-tools/compress-pdf', picked, {});
       } else {
@@ -63,8 +64,15 @@ export default function FileKit() {
       a.download = result.filename;
       a.click();
     } else {
-      // On native, blobUri likely empty — we'd need an alternative. For now, alert
-      await Linking.openURL(result.blobUri);
+      // Native: save data URL to cache and share/open
+      try {
+        const base64 = (result.base64 || result.blobUri || '').split(',').pop() || '';
+        const path = `${FileSystem.cacheDirectory}${result.filename}`;
+        await FileSystem.writeAsStringAsync(path, base64, { encoding: 'base64' as any });
+        await Linking.openURL(path);
+      } catch (e: any) {
+        setErr('Saved but could not open: ' + e.message);
+      }
     }
   };
 
@@ -124,8 +132,32 @@ export default function FileKit() {
         <Pressable testID="pick-file-btn" onPress={() => pick(tool)} style={s.dropZone}>
           <Ionicons name={picked ? 'document-attach' : 'cloud-upload-outline'} size={32} color={theme.colors.brand} />
           <Text style={s.dropTitle}>{picked ? picked.name : 'Tap to choose a file'}</Text>
-          {!picked && <Text style={s.dropSub}>Max 10MB</Text>}
+          {!picked && <Text style={s.dropSub}>Any size, any type</Text>}
         </Pressable>
+
+        {tool === 'image-compress' && picked && (
+          <View style={{ marginTop: 20 }}>
+            <Text style={s.fromLabel}>COMPRESSION LEVEL</Text>
+            <View style={s.qualityRow}>
+              {[
+                { label: 'Extreme', q: 10, hint: '~90% smaller' },
+                { label: 'Strong', q: 25, hint: '~80% smaller' },
+                { label: 'Balanced', q: 50, hint: '~60% smaller' },
+                { label: 'Light', q: 75, hint: '~30% smaller' },
+              ].map((opt) => (
+                <Pressable
+                  key={opt.q}
+                  testID={`quality-${opt.q}`}
+                  onPress={() => setQuality(opt.q)}
+                  style={[s.qBtn, quality === opt.q && s.qBtnActive]}
+                >
+                  <Text style={[s.qBtnLabel, quality === opt.q && s.qBtnLabelActive]}>{opt.label}</Text>
+                  <Text style={[s.qBtnHint, quality === opt.q && { color: theme.colors.onBrandPrimary }]}>{opt.hint}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
 
         {tool === 'convert' && picked && (
           <View style={{ marginTop: 24 }}>
@@ -220,4 +252,10 @@ const s = StyleSheet.create({
   dlBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.colors.brand, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 999, marginTop: 14 },
   dlBtnText: { color: theme.colors.onBrandPrimary, fontWeight: '500' },
   err: { color: theme.colors.error, marginTop: 12 },
+  qualityRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
+  qBtn: { flex: 1, minWidth: '22%', paddingVertical: 12, paddingHorizontal: 6, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff', alignItems: 'center' },
+  qBtnActive: { backgroundColor: theme.colors.brand, borderColor: theme.colors.brand },
+  qBtnLabel: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
+  qBtnLabelActive: { color: theme.colors.onBrandPrimary },
+  qBtnHint: { color: theme.colors.muted, fontSize: 10, marginTop: 2 },
 });
