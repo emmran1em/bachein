@@ -3,6 +3,7 @@ import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import { getToken } from '@/src/api';
 import { theme } from '@/src/theme';
+import { BacheinLogo } from '@/src/components/Logo';
 
 export default function Index() {
   const router = useRouter();
@@ -15,7 +16,7 @@ export default function Index() {
   }, []);
   return (
     <View style={styles.container} testID="splash-screen">
-      <Text style={styles.brand}>bachein</Text>
+      <BacheinLogo size={40} />
       <Text style={styles.tag}>Secure. Signed. Verified.</Text>
       <ActivityIndicator color={theme.colors.brand} style={{ marginTop: 24 }} />
     </View>
@@ -23,6 +24,5 @@ export default function Index() {
 }
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface },
-  brand: { fontSize: 40, fontWeight: '500', color: theme.colors.brand, letterSpacing: -1.5 },
-  tag: { color: theme.colors.muted, fontSize: 13, marginTop: 8, letterSpacing: 1 },
+  tag: { color: theme.colors.muted, fontSize: 12, marginTop: 14, letterSpacing: 1 },
 });

@@ -1,148 +1,204 @@
-import { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
 import { api, getUser } from '@/src/api';
+import { AiAvatar, BacheinLogo } from '@/src/components/Logo';
 
-function StatusPill({ status }: { status: string }) {
-  const map: Record<string, { bg: string; fg: string }> = {
-    draft: { bg: '#F0F0EE', fg: '#6B6B66' },
-    sent: { bg: '#FCEAD8', fg: '#D9882B' },
-    signed: { bg: '#DCEBE2', fg: '#3A6B4C' },
-  };
-  const c = map[status] || map.draft;
+function Section({ title, action, onAction, children, testID }: any) {
   return (
-    <View style={[ss.pill, { backgroundColor: c.bg }]}>
-      <Text style={[ss.pillText, { color: c.fg }]}>{status.toUpperCase()}</Text>
+    <View style={{ marginTop: 24 }} testID={testID}>
+      <View style={ss.sectionHead}>
+        <Text style={ss.sectionTitle}>{title}</Text>
+        {action && <Pressable onPress={onAction}><Text style={ss.sectionAction}>{action}</Text></Pressable>}
+      </View>
+      {children}
     </View>
   );
 }
 
 export default function Home() {
   const router = useRouter();
-  const [docs, setDocs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [user, setUserState] = useState<any>(null);
+  const [sent, setSent] = useState<any[]>([]);
+  const [received, setReceived] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = async () => {
     try {
       const u = await getUser();
       setUserState(u);
-      const list: any = await api.listSent();
-      setDocs(list);
-    } catch (e) {
-      // no-op
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+      const [s, r]: any = await Promise.all([api.listSent(), api.listReceived()]);
+      setSent(s); setReceived(r);
+    } catch {} finally { setLoading(false); setRefreshing(false); }
   };
-
   useFocusEffect(useCallback(() => { load(); }, []));
+
+  const signed = [...sent, ...received].filter(d => d.status === 'signed').slice(0, 4);
+  const pending = sent.filter(d => d.status === 'sent' || d.status === 'draft').slice(0, 4);
+  const recentReceived = received.slice(0, 3);
+  const recentEdited = sent.slice(0, 3);
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
   return (
     <SafeAreaView style={ss.container} edges={['top']} testID="home-screen">
-      <View style={ss.header}>
-        <View>
-          <Text style={ss.greeting}>Welcome,</Text>
-          <Text style={ss.name}>{user?.name || 'there'}</Text>
-        </View>
-        <Pressable testID="ai-assistant-fab" style={ss.aiPill} onPress={() => router.push('/create')}>
-          <Ionicons name="sparkles" size={14} color={theme.colors.brandSecondary} />
-          <Text style={ss.aiPillText}>AI</Text>
-        </Pressable>
-      </View>
-
-      <View style={ss.statsRow}>
-        <View style={ss.statCard}>
-          <Text style={ss.statNum}>{docs.length}</Text>
-          <Text style={ss.statLabel}>Total Docs</Text>
-        </View>
-        <View style={ss.statCard}>
-          <Text style={ss.statNum}>{docs.filter(d => d.status === 'signed').length}</Text>
-          <Text style={ss.statLabel}>Signed</Text>
-        </View>
-        <View style={ss.statCard}>
-          <Text style={ss.statNum}>{docs.filter(d => d.status === 'sent').length}</Text>
-          <Text style={ss.statLabel}>Pending</Text>
-        </View>
-      </View>
-
-      <Text style={ss.sectionTitle}>Your documents</Text>
-
-      {loading ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color={theme.colors.brand} />
-      ) : docs.length === 0 ? (
-        <View style={ss.empty} testID="home-empty">
-          <Ionicons name="document-outline" size={48} color={theme.colors.muted} />
-          <Text style={ss.emptyTitle}>No documents yet</Text>
-          <Text style={ss.emptySub}>Tap the + button to create your first secure document.</Text>
-          <Pressable testID="home-empty-create" style={ss.emptyBtn} onPress={() => router.push('/create')}>
-            <Text style={ss.emptyBtnText}>Create Document</Text>
+      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 220 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}>
+        <View style={ss.headerRow}>
+          <View>
+            <Text style={ss.greeting}>{greeting},</Text>
+            <Text style={ss.name}>{user?.name || 'there'}</Text>
+          </View>
+          <Pressable testID="home-ai" style={ss.aiCard} onPress={() => router.push('/(tabs)/chat')}>
+            <AiAvatar size={36} />
+            <View style={{ marginLeft: 8 }}>
+              <Text style={ss.aiTitle}>Ask Bachein AI</Text>
+              <Text style={ss.aiSub}>Read · Draft · Send</Text>
+            </View>
           </Pressable>
         </View>
-      ) : (
-        <FlatList
-          data={docs}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ paddingBottom: 160, paddingHorizontal: 20 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
-          renderItem={({ item }) => (
-            <Pressable
-              testID={`doc-card-${item.id}`}
-              style={ss.card}
-              onPress={() => router.push(`/document/${item.id}`)}
-            >
-              <View style={{ flex: 1 }}>
-                <View style={ss.rowBetween}>
-                  <Text style={ss.docCategory}>{item.category}</Text>
-                  <StatusPill status={item.status} />
-                </View>
-                <Text style={ss.docTitle} numberOfLines={2}>{item.title}</Text>
-                <Text style={ss.docMeta}>
-                  {new Date(item.created_at).toLocaleDateString()} • {item.mode === 'secure' ? 'Secure' : 'Normal'}
-                  {item.recipient_email ? ` • ${item.recipient_email}` : ''}
-                </Text>
-              </View>
-              <Pressable testID={`check-status-${item.id}`} style={ss.statusBtn} onPress={() => router.push(`/document/${item.id}`)}>
-                <Text style={ss.statusBtnText}>Status</Text>
-                <Ionicons name="chevron-forward" size={14} color={theme.colors.brand} />
+
+        {loading ? (
+          <ActivityIndicator style={{ marginTop: 40 }} color={theme.colors.brand} />
+        ) : (
+          <>
+            {/* Quick actions */}
+            <View style={ss.quickRow}>
+              <Pressable testID="quick-create" style={ss.quick} onPress={() => router.push('/create')}>
+                <Ionicons name="add-circle" size={22} color={theme.colors.accent} />
+                <Text style={ss.quickText}>Create</Text>
               </Pressable>
-            </Pressable>
-          )}
-        />
-      )}
+              <Pressable testID="quick-write" style={ss.quick} onPress={() => router.push('/editor')}>
+                <Ionicons name="create-outline" size={22} color={theme.colors.brand} />
+                <Text style={ss.quickText}>Write</Text>
+              </Pressable>
+              <Pressable testID="quick-docs" style={ss.quick} onPress={() => router.push('/(tabs)/received')}>
+                <Ionicons name="folder-open-outline" size={22} color={theme.colors.brand} />
+                <Text style={ss.quickText}>Documents</Text>
+              </Pressable>
+              <Pressable testID="quick-vault" style={ss.quick} onPress={() => router.push('/(tabs)/vault')}>
+                <Ionicons name="lock-closed-outline" size={22} color={theme.colors.brand} />
+                <Text style={ss.quickText}>Vault</Text>
+              </Pressable>
+            </View>
+
+            {/* Stats */}
+            <View style={ss.statsRow}>
+              <StatCard num={sent.length} label="Sent" />
+              <StatCard num={received.length} label="Received" />
+              <StatCard num={signed.length} label="Signed" />
+              <StatCard num={pending.length} label="Pending" />
+            </View>
+
+            {recentReceived.length > 0 && (
+              <Section title="Recently received" action="See all" onAction={() => router.push('/(tabs)/received')} testID="section-received">
+                {recentReceived.map((d: any) => (
+                  <RowCard key={d.id} item={d} kind="received" onPress={() => {
+                    if (d.mode === 'secure' && d.signature_status !== 'signed') router.push(`/receive/${d.id}`);
+                    else router.push(`/document/${d.id}`);
+                  }} />
+                ))}
+              </Section>
+            )}
+
+            {recentEdited.length > 0 && (
+              <Section title="Your documents" action="See all" onAction={() => router.push('/(tabs)/received')} testID="section-sent">
+                {recentEdited.map((d: any) => (
+                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} />
+                ))}
+              </Section>
+            )}
+
+            {pending.length > 0 && (
+              <Section title="Pending signatures" testID="section-pending">
+                {pending.map((d: any) => (
+                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} />
+                ))}
+              </Section>
+            )}
+
+            {signed.length > 0 && (
+              <Section title="Recently signed" action="Open Vault" onAction={() => router.push('/(tabs)/vault')} testID="section-signed">
+                {signed.map((d: any) => (
+                  <RowCard key={d.id} item={d} kind="signed" onPress={() => router.push(`/document/${d.id}`)} />
+                ))}
+              </Section>
+            )}
+
+            {sent.length === 0 && received.length === 0 && (
+              <View style={ss.empty}>
+                <BacheinLogo size={32} />
+                <Text style={ss.emptyTitle}>Your document workspace is ready.</Text>
+                <Text style={ss.emptySub}>Create your first document or ask Bachein AI to draft one for you.</Text>
+                <Pressable testID="empty-create-btn" style={ss.emptyBtn} onPress={() => router.push('/create')}>
+                  <Text style={ss.emptyBtnText}>Create your first document</Text>
+                </Pressable>
+              </View>
+            )}
+          </>
+        )}
+      </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function StatCard({ num, label }: { num: number; label: string }) {
+  return (
+    <View style={ss.statCard}>
+      <Text style={ss.statNum}>{num}</Text>
+      <Text style={ss.statLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function RowCard({ item, kind, onPress }: { item: any; kind: string; onPress: () => void }) {
+  const isNormal = item.mode === 'normal';
+  return (
+    <Pressable testID={`home-row-${item.id}`} style={ss.rowCard} onPress={onPress}>
+      <View style={ss.rowIcon}>
+        <Ionicons name={isNormal ? 'document-text-outline' : 'shield-checkmark-outline'} size={18} color={theme.colors.brand} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={ss.rowTitle} numberOfLines={1}>{item.title}</Text>
+        <Text style={ss.rowMeta} numberOfLines={1}>
+          {kind === 'received' ? `from ${item.sender_email}` : item.category}
+          {' · '}
+          {new Date(item.updated_at || item.created_at).toLocaleDateString()}
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={theme.colors.muted} />
+    </Pressable>
   );
 }
 
 const ss = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.surface },
-  header: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   greeting: { color: theme.colors.muted, fontSize: 13 },
-  name: { color: theme.colors.brand, fontSize: 26, fontWeight: '500', letterSpacing: -0.5 },
-  aiPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FBE6DC', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, gap: 6 },
-  aiPillText: { color: theme.colors.brandSecondary, fontWeight: '500', fontSize: 12 },
-  statsRow: { flexDirection: 'row', gap: 12, paddingHorizontal: 20, marginTop: 16 },
-  statCard: { flex: 1, backgroundColor: '#fff', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: theme.colors.border },
-  statNum: { fontSize: 24, color: theme.colors.brand, fontWeight: '500' },
-  statLabel: { fontSize: 11, color: theme.colors.muted, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
-  sectionTitle: { paddingHorizontal: 24, marginTop: 24, marginBottom: 12, fontSize: 12, color: theme.colors.muted, textTransform: 'uppercase', letterSpacing: 1 },
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: theme.colors.border },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  docCategory: { color: theme.colors.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
-  docTitle: { color: theme.colors.brand, fontSize: 16, fontWeight: '500', marginTop: 6 },
-  docMeta: { color: theme.colors.muted, fontSize: 12, marginTop: 6 },
-  statusBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12, alignSelf: 'flex-start', borderWidth: 1, borderColor: theme.colors.borderStrong, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
-  statusBtnText: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
-  pill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
-  pillText: { fontSize: 10, fontWeight: '500', letterSpacing: 0.5 },
-  empty: { alignItems: 'center', marginTop: 80, paddingHorizontal: 40 },
-  emptyTitle: { color: theme.colors.brand, fontSize: 18, fontWeight: '500', marginTop: 16 },
+  name: { color: theme.colors.brand, fontSize: 24, fontWeight: '500', letterSpacing: -0.5 },
+  aiCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.card },
+  aiTitle: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
+  aiSub: { color: theme.colors.muted, fontSize: 10 },
+  quickRow: { flexDirection: 'row', gap: 8, marginTop: 20 },
+  quick: { flex: 1, alignItems: 'center', backgroundColor: theme.colors.card, paddingVertical: 14, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.border, gap: 6 },
+  quickText: { color: theme.colors.brand, fontSize: 11, fontWeight: '500' },
+  statsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  statCard: { flex: 1, backgroundColor: theme.colors.card, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: theme.colors.border },
+  statNum: { fontSize: 22, color: theme.colors.brand, fontWeight: '500' },
+  statLabel: { fontSize: 10, color: theme.colors.muted, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  sectionTitle: { color: theme.colors.brand, fontSize: 15, fontWeight: '500' },
+  sectionAction: { color: theme.colors.accent, fontSize: 12, fontWeight: '500' },
+  rowCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: theme.colors.card, padding: 12, borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: theme.colors.border },
+  rowIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center' },
+  rowTitle: { color: theme.colors.brand, fontSize: 13, fontWeight: '500' },
+  rowMeta: { color: theme.colors.muted, fontSize: 11, marginTop: 2 },
+  empty: { alignItems: 'center', marginTop: 60, paddingHorizontal: 30 },
+  emptyTitle: { color: theme.colors.brand, fontSize: 18, fontWeight: '500', marginTop: 24, textAlign: 'center' },
   emptySub: { color: theme.colors.muted, textAlign: 'center', marginTop: 8, lineHeight: 20 },
-  emptyBtn: { backgroundColor: theme.colors.brand, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 999, marginTop: 20 },
+  emptyBtn: { backgroundColor: theme.colors.brand, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 999, marginTop: 20 },
   emptyBtnText: { color: theme.colors.onBrandPrimary, fontWeight: '500' },
 });

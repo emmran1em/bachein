@@ -1,37 +1,31 @@
-# Bachein — PRD (v3: Google Auth + File Kit + Real Biometrics + Voice Match)
+# Bachein — PRD (v4: UI Refresh + Documents Hub + Home Redesign)
 
-## Stack
-- Frontend: Expo Router (RN), TypeScript, react-native-svg, expo-audio, expo-camera, expo-document-picker, expo-web-browser
-- Backend: FastAPI, Motor (MongoDB), JWT, bcrypt, emergentintegrations (Gemini), Resend, pypdf, reportlab, pdf2docx, python-docx, openpyxl, python-pptx, Pillow, opencv-python (face detect + hash), httpx (Whisper)
-- AI: Gemini 3 Flash + Gemini 3.1 Pro (drafting/review), OpenAI Whisper-1 via Emergent Universal Key (voice STT match)
-- Email: Resend (test mode — only delivers to `emmran1empire@gmail.com` until domain verified)
+## What shipped in V4
+- **New Claude/Anthropic-inspired UI palette** — warm parchment surface (#F7F5F0), rust accent (#C5613E), softer radii, refined typography, custom logo (`bachein` wordmark with accent underline). No more purple/violet AI slop.
+- **AI avatar component** — minimal chip-icon robot mark with accent dot, used in Home and Chat.
+- **File Kit rebuilt** — no file size limits, 4-level compression slider (Extreme ~90% / Strong ~80% / Balanced ~60% / Light ~30%), proper error surfacing (no more `[object Object]`), native save to app Downloads folder with share sheet, persistent Downloads history in AsyncStorage, three-dot menu at top-left for Downloads & Clear.
+- **Documents tab** (renamed from Inbox) — segmented **Sent | Received** view with unread badge, different row layouts for Normal PDF (Open button only) vs Secure/NDA (Category + status chips + verification chips + Status/Verify button), three-dot More menu with Write Document + GitHub Workspace + Scan.
+- **Home = Document hub** — dynamic greeting, AI card, 4 quick actions (Create / Write / Documents / Vault), 4 stats (Sent/Received/Signed/Pending), and up to 4 dynamic sections: Recently received / Your documents / Pending signatures / Recently signed.
+- **Send-success feedback** — green success toast at top + two-note "sent" audio tone the moment a secure doc is dispatched.
+- **Global Toast host** — one central non-blocking notification system used across the app.
+- **New routes** stubbed: `/editor` (Write Document — full editor coming next), `/github` (GitHub Workspace — OAuth credentials configured, connector coming next).
 
-## V3 Features
-- **Google sign-in** (Emergent OAuth) button on login screen
-- **File Kit tab** — Image Compressor (Pillow), PDF Compressor (pypdf), Document Converter (PDF/DOCX/XLSX/PPTX/TXT/MD/JPG/PNG/WEBP → PDF/TXT/DOCX/JPG/PNG/WEBP). PDF↔DOCX uses `pdf2docx` for layout preservation.
-- **Real face match** — OpenCV Haar cascade face detection + perceptual hash comparison. Auto-enrolls on first verification, then compares against enrolled hash on subsequent verifications. Distance logged in audit trail.
-- **Real voice oath match** — Whisper-1 transcription + fuzzy token overlap similarity ≥ 0.5 threshold. Backend rejects mismatched oaths with actual transcript in error.
-- **Mandatory recipient email** — enforced both frontend and backend for secure documents.
-- **File-open intent filters** — app.json declares Android `intentFilters` and iOS `CFBundleDocumentTypes` so Bachein appears in "Open with…" for PDF/DOCX/XLSX/PPTX/images (works after build, not in Expo Go).
-- **Real emails, magic links, live-status polling, signed & audit PDF downloads, AI chat with PDF attach + email action** — all carried over from V2.
+## Backend additions in .env
+- RESEND_API_KEY updated to new key with verified-domain plan
+- GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET stored
+- AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION stored for future Rekognition integration
 
-## Endpoints (V3 additions)
-- `POST /api/auth/google/session` — exchange Emergent OAuth session_id → Bachein JWT
-- `POST /api/auth/face/enroll` — save perceptual face hash
-- `GET /api/auth/face/status`
-- `GET /api/file-tools/formats`
-- `POST /api/file-tools/convert` (multipart, `target` form field)
-- `POST /api/file-tools/compress-image` (multipart, `quality`)
-- `POST /api/file-tools/compress-pdf` (multipart)
+## Still to build (queued in priority order F→B→I→A→C→D→E→G→H)
+- ✅ F. UI refresh — DONE this session
+- ✅ B. Sent + Received redesign + sound/toast — DONE
+- ✅ I. Home hub — DONE
+- ⏳ A. Word-like AI editor with Command Bar + profession modes (Director/Lawyer/Teacher/Novelist/Researcher/Patent/Business/Engineer/Custom) — placeholder route created
+- ⏳ C. Personal cloud workspace (My Drive / Drafts / Sent / Received / Vault / Signed / Templates / Imports / Shared / Favorites / Recent / Trash) + storage quota + Free tier limits
+- ⏳ D. Real-time collab (WebSockets, live cursors, presence, version history, comments)
+- ⏳ E. System document handler registration (Android intent filters + iOS UTIs are declared, activates on EAS build)
+- ⏳ G. GitHub Workspace connector — OAuth + repo/file browser + AI-with-repo-context — placeholder route created
+- ⏳ H. Push notifications (needs Emergent-managed push + FCM key from user)
 
-Voice/Face endpoints now perform real ML matching, not stub storage.
-
-## Testing
-- Backend V3: 80/82 PASS (97.6%). 2 pre-existing minor issues addressed post-report (signed-pdf `?token=` and prefs tier validation).
-
-## Known limitations
-- Resend free tier — universal delivery requires domain verification
-- GitHub sign-in not wired (needs GitHub OAuth app credentials from user)
-- Document converter for PPTX/XLSX → PDF extracts text only (not full layout); PDF↔DOCX uses pdf2docx layout engine
-- Face match uses Haar + perceptual hash (lightweight); AWS Rekognition CompareFaces would be more accurate but requires AWS keys
-- File-open intent filters only activate in EAS build, not in Expo Go
+## Setup you still need to do
+- **Resend domain**: RESEND_FROM still uses `onboarding@resend.dev`. Tell me which domain you verified at resend.com/domains and I'll switch RESEND_FROM to `noreply@<yourdomain>`.
+- **Deployment/publishing**: use the Emergent Publish button (top-right) when ready — that generates a signed EAS build activating the "Open with Bachein" file handler on device.

@@ -7,6 +7,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
 import { api, uploadFile } from '@/src/api';
+import { useToast } from '@/src/components/Toast';
+import { playSent } from '@/src/lib/sound';
 
 type Step = 'intent' | 'draft' | 'attach' | 'security' | 'recipient';
 
@@ -28,6 +30,7 @@ const TOGGLES: { key: string; label: string; sub: string }[] = [
 
 export default function SecureCreate() {
   const router = useRouter();
+  const toast = useToast();
   const { category } = useLocalSearchParams<{ category: string }>();
   const [step, setStep] = useState<Step>('intent');
   const [intent, setIntent] = useState('');
@@ -95,6 +98,8 @@ export default function SecureCreate() {
         security_config: config,
         attached_files: attached,
       });
+      playSent();
+      toast.show(`Sent to ${recipient.trim()} ✓`, 'success');
       router.replace(`/document/${doc.id}`);
     } catch (e: any) { setErr(e.message); } finally { setSending(false); }
   };
