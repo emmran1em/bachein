@@ -95,6 +95,15 @@ export const api = {
     request('/documents/sign', { method: 'POST', body: JSON.stringify({ document_id, signature_base64 }) }),
   status: (id: string) => request(`/documents/${id}/status`),
   vault: () => request('/vault'),
+  editorTypes: () => request('/editor/types'),
+  editorList: () => request('/editor/list'),
+  editorGet: (id: string) => request(`/editor/${id}`),
+  editorSave: (body: { id?: string; title: string; doc_type: string; html: string; plain_text?: string }) =>
+    request('/editor/save', { method: 'POST', body: JSON.stringify(body) }),
+  editorAi: (body: { doc_type: string; current_html: string; instruction: string }) =>
+    request('/editor/ai-command', { method: 'POST', body: JSON.stringify(body) }),
+  editorInvite: (body: { document_id: string; email: string; permission: string }) =>
+    request('/editor/invite', { method: 'POST', body: JSON.stringify(body) }),
   signedPdfUrl: (id: string) => `${API}/documents/${id}/signed-pdf`,
   auditPdfUrl: (id: string) => `${API}/documents/${id}/audit-pdf`,
 };

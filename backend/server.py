@@ -190,6 +190,23 @@ class ConvertRequest(BaseModel):
 class FaceEnrollRequest(BaseModel):
     image_base64: str
 
+class EditorDocSave(BaseModel):
+    id: Optional[str] = None
+    title: str
+    doc_type: str  # Movie Story, NDA, etc.
+    html: str
+    plain_text: Optional[str] = ""
+
+class EditorAiRequest(BaseModel):
+    doc_type: str
+    current_html: str
+    instruction: str
+
+class CollaboratorInvite(BaseModel):
+    document_id: str
+    email: EmailStr
+    permission: str = "edit"  # view/comment/edit/admin
+
 # ============== Auth helpers ==============
 
 def hash_password(pw: str) -> str:
@@ -410,6 +427,19 @@ async def magic_consume(req: MagicLinkConsume):
     await db.magic_tokens.update_one({"token": req.token}, {"$set": {"used": True, "used_at": now_iso()}})
     token = create_token(user["id"], user["email"])
     return AuthResponse(token=token, user=user_out(user))
+
+
+@api.get("/auth/magic/lookup")
+async def magic_lookup(token: str):
+    """Preview magic token target (editor doc, secure doc, or none) without consuming."""
+    rec = await db.magic_tokens.find_one({"token": token})
+    if not rec:
+        return {"valid": False}
+    return {
+        "valid": not rec.get("used") and rec.get("expires_at", "") > now_iso(),
+        "editor_doc_id": rec.get("editor_doc_id"),
+        "doc_id": rec.get("doc_id"),
+    }
 
 # ---------- AI ----------
 
@@ -977,6 +1007,150 @@ async def vault(user=Depends(get_current_user)):
         {"_id": 0, "otp_code": 0, "signature_base64": 0, "voice_oath_audio": 0, "face_image_b64": 0}
     ).sort("signed_at", -1).to_list(500)
     return {"sent": sent, "received": received}
+
+
+# ---------- Editor Documents (rich-text) ----------
+
+PROFESSION_MODES = {
+    "Movie Story": ("Director Mode", "You are a screenplay/story-development assistant. Understand plot, tone, character arcs, and dialogue. Suggest emotionally resonant continuations, scene descriptions, and improve dramatic tension."),
+    "Novel": ("Novelist Mode", "You are a novelist's writing partner. Maintain narrative voice, pace, and character consistency; suggest vivid prose, sensory detail, and plot beats."),
+    "Legal Agreement": ("Lawyer Mode", "You are a legal drafting assistant. Ensure enforceability, detect missing clauses, identify legal risks, tighten language."),
+    "NDA": ("Lawyer Mode", "You are an NDA specialist. Ensure confidentiality clauses, IP protection, jurisdiction, term, remedies, and reverse engineering restrictions are complete."),
+    "Patent": ("Patent Attorney Mode", "You are a patent attorney. Structure claims, background, summary, detailed description; check novelty, non-obviousness, enablement."),
+    "Business Proposal": ("Business Strategist Mode", "You are a business strategist. Sharpen value proposition, market sizing, competitive edge, financial projections."),
+    "Investor Pitch": ("Pitch Coach Mode", "You are a startup pitch coach. Sharpen problem, solution, TAM, traction, team, ask."),
+    "Research Paper": ("Researcher Mode", "You are an academic writing assistant. Ensure abstract, methodology, results, discussion; academic tone, citations, IMRaD structure."),
+    "Technical Documentation": ("Engineer Mode", "You are a technical writer. Clear API/architecture descriptions, code fences, examples, prerequisites."),
+    "Teacher Question Paper": ("Teacher Mode", "You are a curriculum expert. Generate leveled questions, answer keys, and mark distributions aligned with grade/board."),
+    "Resume": ("Career Coach Mode", "You are a resume coach. Emphasize impact, metrics, action verbs, clean formatting."),
+    "Meeting Notes": ("Notes Mode", "You are a meeting-notes assistant. Structure attendees, agenda, decisions, action items."),
+    "Contract": ("Lawyer Mode", "You are a contract drafter. Ensure parties, scope, deliverables, payment, term, termination, dispute resolution."),
+    "Policy Document": ("Policy Writer Mode", "You are a policy writer. Ensure scope, definitions, obligations, enforcement, revision history."),
+    "Other": ("Assistant Mode", "You are a helpful writing assistant."),
+}
+
+
+@api.get("/editor/types")
+async def editor_types():
+    return {"types": list(PROFESSION_MODES.keys()), "modes": {k: v[0] for k, v in PROFESSION_MODES.items()}}
+
+
+@api.post("/editor/save")
+async def editor_save(req: EditorDocSave, user=Depends(get_current_user)):
+    doc_id = req.id or str(uuid.uuid4())
+    existing = await db.editor_docs.find_one({"id": doc_id, "owner_id": user["id"]})
+    now = now_iso()
+    if existing:
+        # push version snapshot before overwrite
+        await db.editor_docs.update_one(
+            {"id": doc_id},
+            {"$set": {"title": req.title, "doc_type": req.doc_type, "html": req.html, "plain_text": req.plain_text or "", "updated_at": now},
+             "$push": {"versions": {"ts": now, "by": user["email"], "html": existing.get("html", "")[:200000]}}}
+        )
+    else:
+        await db.editor_docs.insert_one({
+            "id": doc_id, "owner_id": user["id"], "owner_email": user["email"],
+            "title": req.title, "doc_type": req.doc_type,
+            "html": req.html, "plain_text": req.plain_text or "",
+            "collaborators": [],
+            "created_at": now, "updated_at": now, "versions": [],
+        })
+    return {"id": doc_id, "saved_at": now}
+
+
+@api.get("/editor/list")
+async def editor_list(user=Depends(get_current_user)):
+    owned = await db.editor_docs.find(
+        {"$or": [{"owner_id": user["id"]}, {"collaborators.email": user["email"]}]},
+        {"_id": 0, "versions": 0}
+    ).sort("updated_at", -1).to_list(200)
+    return {"documents": owned}
+
+
+@api.get("/editor/{doc_id}")
+async def editor_get(doc_id: str, user=Depends(get_current_user)):
+    doc = await db.editor_docs.find_one({"id": doc_id}, {"_id": 0})
+    if not doc: raise HTTPException(404, "Not found")
+    if doc["owner_id"] != user["id"] and not any(c.get("email") == user["email"] for c in doc.get("collaborators", [])):
+        raise HTTPException(403, "Forbidden")
+    return doc
+
+
+@api.post("/editor/ai-command")
+async def editor_ai(req: EditorAiRequest, user=Depends(get_current_user)):
+    mode_name, system = PROFESSION_MODES.get(req.doc_type, PROFESSION_MODES["Other"])
+    prompt = (
+        f"You are in {mode_name}. Current document HTML is below. "
+        f"Apply the user's instruction and return the FULL updated HTML only, no explanations, no markdown fences.\n\n"
+        f"INSTRUCTION: {req.instruction}\n\n"
+        f"CURRENT HTML:\n{req.current_html[:12000]}"
+    )
+    try:
+        text = await gemini_chat(system, prompt, session_id=f"editor-{user['id']}-{uuid.uuid4()}", model="gemini-3.1-pro-preview")
+    except Exception as e:
+        raise HTTPException(500, f"AI error: {e}")
+    # Strip potential code fences
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else t
+        if t.endswith("```"): t = t[:-3]
+    return {"html": t.strip(), "mode": mode_name}
+
+
+@api.post("/editor/export-pdf")
+async def editor_export_pdf(req: EditorDocSave, user=Depends(get_current_user)):
+    # Strip HTML tags to plain text (simple)
+    import re as _re
+    plain = _re.sub(r"<[^>]+>", " ", req.html or "")
+    plain = _re.sub(r"\s+", " ", plain).strip()
+    pdf = text_to_pdf(req.title or "Document", plain, watermark=f"bachein • {user['email']}")
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{(req.title or "document").replace(" ","_")}.pdf"'
+    })
+
+
+@api.post("/editor/invite")
+async def editor_invite(req: CollaboratorInvite, bg: BackgroundTasks, user=Depends(get_current_user)):
+    doc = await db.editor_docs.find_one({"id": req.document_id})
+    if not doc: raise HTTPException(404, "Doc not found")
+    if doc["owner_id"] != user["id"]:
+        raise HTTPException(403, "Only owner can invite")
+    email = req.email.lower()
+    if req.permission not in ("view", "comment", "edit", "admin"):
+        raise HTTPException(400, "Invalid permission")
+    # Upsert collaborator entry
+    await db.editor_docs.update_one(
+        {"id": req.document_id, "collaborators.email": {"$ne": email}},
+        {"$push": {"collaborators": {"email": email, "permission": req.permission, "invited_at": now_iso(), "invited_by": user["email"]}}}
+    )
+    await db.editor_docs.update_one(
+        {"id": req.document_id, "collaborators.email": email},
+        {"$set": {"collaborators.$.permission": req.permission}}
+    )
+    # Ensure invitee user exists so magic link can log them in
+    existing = await db.users.find_one({"email": email})
+    if not existing:
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()), "email": email, "name": email.split("@")[0].title(),
+            "password_hash": hash_password(secrets.token_urlsafe(16)),
+            "created_at": now_iso(), "tier": "standard", "dark_mode": False,
+        })
+    # Issue magic link to open the editor doc
+    token = secrets.token_urlsafe(32)
+    await db.magic_tokens.insert_one({
+        "token": token, "email": email,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
+        "used": False, "editor_doc_id": req.document_id,
+    })
+    link = f"{APP_URL}/magic?token={token}&editor={req.document_id}"
+    subject = f"📄 {user['name']} invited you to collaborate on \"{doc['title']}\""
+    body = f"""
+<p style="line-height:22px;color:#4B4842;"><b>{user['name']}</b> ({user['email']}) invited you as <b>{req.permission}</b> on <b>{doc['title']}</b>.</p>
+<p style="line-height:22px;color:#4B4842;">Open the document to start writing together with real-time updates.</p>
+"""
+    from email_service import send_email, _layout
+    bg.add_task(send_email, email, subject, _layout("Collaboration invite", body, "Open document", link))
+    return {"invited": True, "email": email, "permission": req.permission}
 
 # ---------- File Tools ----------
 

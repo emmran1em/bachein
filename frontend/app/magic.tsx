@@ -6,7 +6,7 @@ import { api, setToken, setUser } from '@/src/api';
 import { theme } from '@/src/theme';
 
 export default function MagicLanding() {
-  const { token, doc } = useLocalSearchParams<{ token: string; doc?: string }>();
+  const { token, doc, editor } = useLocalSearchParams<{ token: string; doc?: string; editor?: string }>();
   const router = useRouter();
   const [err, setErr] = useState('');
 
@@ -17,14 +17,15 @@ export default function MagicLanding() {
         const r: any = await api.magicConsume(token);
         await setToken(r.token);
         await setUser(r.user);
-        if (doc) router.replace(`/receive/${doc}`);
+        if (editor) router.replace(`/editor?id=${editor}`);
+        else if (doc) router.replace(`/receive/${doc}`);
         else router.replace('/(tabs)');
       } catch (e: any) {
         setErr(e.message || 'Sign-in failed');
         setTimeout(() => router.replace('/(auth)/login'), 1800);
       }
     })();
-  }, [token, doc]);
+  }, [token, doc, editor]);
 
   return (
     <SafeAreaView style={s.container} testID="magic-screen">
