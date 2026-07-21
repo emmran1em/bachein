@@ -102,8 +102,18 @@ export const api = {
 export async function uploadFile(file: { uri: string; name: string; type: string }): Promise<any> {
   const token = await getToken();
   const form = new FormData();
-  // @ts-ignore RN FormData
-  form.append('file', { uri: file.uri, name: file.name, type: file.type });
+  const isWeb = typeof document !== 'undefined';
+  if (isWeb) {
+    const fetched = await fetch(file.uri);
+    const blob = await fetched.blob();
+    const asFile: any = (typeof File !== 'undefined')
+      ? new File([blob], file.name, { type: file.type || blob.type || 'application/octet-stream' })
+      : blob;
+    form.append('file', asFile, file.name);
+  } else {
+    // @ts-ignore RN FormData
+    form.append('file', { uri: file.uri, name: file.name, type: file.type });
+  }
   const res = await fetch(`${API}/upload`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -120,8 +130,23 @@ export async function fileToolUpload(endpoint: string, file: { uri: string; name
   const token = await getToken();
   const form = new FormData();
   for (const [k, v] of Object.entries(extraFields)) form.append(k, v);
-  // @ts-ignore RN FormData
-  form.append('file', { uri: file.uri, name: file.name, type: file.type });
+
+  // Platform-aware file append: web needs real Blob/File, native uses {uri,name,type}
+  const isWeb = typeof document !== 'undefined';
+  if (isWeb) {
+    // Fetch the picked file to get a Blob (works with expo DocumentPicker web URIs)
+    const fetched = await fetch(file.uri);
+    const blob = await fetched.blob();
+    // File constructor is more compatible; fallback to Blob when unavailable
+    const asFile: any = (typeof File !== 'undefined')
+      ? new File([blob], file.name, { type: file.type || blob.type || 'application/octet-stream' })
+      : blob;
+    form.append('file', asFile, file.name);
+  } else {
+    // @ts-ignore RN FormData
+    form.append('file', { uri: file.uri, name: file.name, type: file.type });
+  }
+
   const res = await fetch(`${API}${endpoint}`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -148,7 +173,7 @@ export async function fileToolUpload(endpoint: string, file: { uri: string; name
   const blob = await res.blob();
   let blobUri = '';
   let base64: string | undefined;
-  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+  if (isWeb && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
     blobUri = URL.createObjectURL(blob);
   } else {
     // React Native: read blob as data URL

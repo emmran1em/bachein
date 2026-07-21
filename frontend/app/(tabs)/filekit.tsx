@@ -53,7 +53,21 @@ export default function FileKit() {
       const res = await DocumentPicker.getDocumentAsync({ type: types, copyToCacheDirectory: true });
       if (res.canceled) return;
       const asset = res.assets[0];
-      setPicked({ uri: asset.uri, name: asset.name, type: asset.mimeType || 'application/octet-stream' });
+      // Force mime detection when picker returns null
+      let mimeType = asset.mimeType;
+      if (!mimeType || mimeType === 'application/octet-stream') {
+        const ext = (asset.name || '').split('.').pop()?.toLowerCase() || '';
+        const map: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+          pdf: 'application/pdf',
+          docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          txt: 'text/plain', md: 'text/plain',
+        };
+        mimeType = map[ext] || 'application/octet-stream';
+      }
+      setPicked({ uri: asset.uri, name: asset.name, type: mimeType });
       if (tool === 'convert') {
         const ext = (asset.name.split('.').pop() || '').toLowerCase();
         setDetected(ext);

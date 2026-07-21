@@ -7,6 +7,7 @@ import Svg, { Path } from 'react-native-svg';
 import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { theme } from '@/src/theme';
 import { api } from '@/src/api';
 
@@ -39,7 +40,25 @@ export default function ReceiveFlow() {
   const [paths, setPaths] = useState<string[]>([]);
   const currentPath = useRef<string>('');
   const [typedSig, setTypedSig] = useState('');
-  const [sigMode, setSigMode] = useState<'draw' | 'type'>('draw');
+  const [sigMode, setSigMode] = useState<'draw' | 'type' | 'upload'>('draw');
+  const [uploadedSig, setUploadedSig] = useState<string | null>(null);
+
+  const pickSignatureImage = async () => {
+    setErr('');
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) { setErr('Photo library permission needed'); return; }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        base64: true,
+        quality: 0.8,
+      });
+      if (res.canceled) return;
+      const a = res.assets[0];
+      if (a.base64) setUploadedSig('data:image/jpeg;base64,' + a.base64);
+    } catch (e: any) { setErr(e.message); }
+  };
 
   useEffect(() => {
     api.getDocument(id!).then((d: any) => setDoc(d)).catch((e) => setErr(e.message)).finally(() => setLoading(false));
@@ -158,9 +177,16 @@ export default function ReceiveFlow() {
   const submitSignature = async () => {
     if (sigMode === 'draw' && paths.length === 0) { setErr('Please draw your signature'); return; }
     if (sigMode === 'type' && !typedSig.trim()) { setErr('Please type your signature'); return; }
+    if (sigMode === 'upload' && !uploadedSig) { setErr('Please attach a signature image'); return; }
     setErr(''); setBusy(true);
     try {
-      const sigData = JSON.stringify({ mode: sigMode, paths: sigMode === 'draw' ? paths : null, text: sigMode === 'type' ? typedSig : null, ts: new Date().toISOString() });
+      const sigData = JSON.stringify({
+        mode: sigMode,
+        paths: sigMode === 'draw' ? paths : null,
+        text: sigMode === 'type' ? typedSig : null,
+        image_b64: sigMode === 'upload' ? uploadedSig : null,
+        ts: new Date().toISOString(),
+      });
       await api.readProgress(id!, Math.max(100, readPct));
       await api.sign(id!, sigData);
       setStep('confirm');
@@ -316,6 +342,9 @@ export default function ReceiveFlow() {
               <Pressable testID="sig-mode-type" style={[s.sigModeBtn, sigMode === 'type' && s.sigModeActive]} onPress={() => setSigMode('type')}>
                 <Text style={[s.sigModeText, sigMode === 'type' && s.sigModeTextActive]}>Type</Text>
               </Pressable>
+              <Pressable testID="sig-mode-upload" style={[s.sigModeBtn, sigMode === 'upload' && s.sigModeActive]} onPress={() => setSigMode('upload')}>
+                <Text style={[s.sigModeText, sigMode === 'upload' && s.sigModeTextActive]}>Attach</Text>
+              </Pressable>
             </View>
             {sigMode === 'draw' ? (
               <>
@@ -342,8 +371,29 @@ export default function ReceiveFlow() {
                   </Pressable>
                 </View>
               </>
-            ) : (
+            ) : sigMode === 'type' ? (
               <TextInput testID="typed-signature-input" style={s.typedSig} value={typedSig} onChangeText={setTypedSig} placeholder="Type your full name" placeholderTextColor={theme.colors.muted} />
+            ) : (
+              <View style={{ marginTop: 12 }}>
+                {uploadedSig ? (
+                  <View style={s.sigPreview}>
+                    <Image source={{ uri: uploadedSig }} style={{ flex: 1, resizeMode: 'contain' }} />
+                  </View>
+                ) : (
+                  <Pressable testID="pick-sig-btn" onPress={pickSignatureImage} style={s.sigUploadZone}>
+                    <Ionicons name="images-outline" size={28} color={theme.colors.brand} />
+                    <Text style={s.sigUploadText}>Attach signature from your photos</Text>
+                    <Text style={s.sigUploadSub}>JPG or PNG · transparent background works best</Text>
+                  </Pressable>
+                )}
+                {uploadedSig && (
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                    <Pressable testID="clear-sig-upload" style={s.clearBtn} onPress={() => setUploadedSig(null)}>
+                      <Text style={s.clearBtnText}>Replace</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
             )}
             {err ? <Text style={s.err}>{err}</Text> : null}
             <Pressable testID="submit-sig-btn" style={[s.primaryBtn, busy && { opacity: 0.6 }]} onPress={submitSignature} disabled={busy}>
@@ -440,4 +490,8 @@ const s = StyleSheet.create({
   unlockedBadge: { flexDirection: 'row', alignSelf: 'flex-start', alignItems: 'center', gap: 6, backgroundColor: '#DCEBE2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, marginBottom: 12 },
   unlockedText: { color: theme.colors.success, fontSize: 10, fontWeight: '500', letterSpacing: 0.5 },
   attachLine: { color: theme.colors.brand, marginTop: 8, fontSize: 13 },
+  sigPreview: { height: 160, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, marginTop: 12, overflow: 'hidden', padding: 10 },
+  sigUploadZone: { height: 160, backgroundColor: '#fff', borderRadius: 12, borderWidth: 2, borderColor: theme.colors.border, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 12 },
+  sigUploadText: { color: theme.colors.brand, fontWeight: '500' },
+  sigUploadSub: { color: theme.colors.muted, fontSize: 11 },
 });

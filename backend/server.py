@@ -1029,6 +1029,11 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Content-Disposition",
+        "X-Original-Size", "X-Compressed-Size",
+        "X-Detected-Format", "X-Target-Format",
+    ],
 )
 
 @app.on_event("shutdown")
