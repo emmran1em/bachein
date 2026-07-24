@@ -26,6 +26,7 @@ export default function Home() {
   const [received, setReceived] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [drawer, setDrawer] = useState(false);
 
   const load = async () => {
     try {
@@ -44,20 +45,22 @@ export default function Home() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
+  const goTo = (r: string) => { setDrawer(false); router.push(r as any); };
+  const logout = async () => { setDrawer(false); await clearAuth(); router.replace('/(auth)/login'); };
+
   return (
     <SafeAreaView style={ss.container} edges={['top']} testID="home-screen">
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 220 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}>
         <View style={ss.headerRow}>
-          <View>
+          <Pressable testID="menu-btn" onPress={() => setDrawer(true)} style={ss.menuBtn}>
+            <Ionicons name="menu" size={22} color={theme.colors.brand} />
+          </Pressable>
+          <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={ss.greeting}>{greeting},</Text>
             <Text style={ss.name}>{user?.name || 'there'}</Text>
           </View>
           <Pressable testID="home-ai" style={ss.aiCard} onPress={() => router.push('/(tabs)/chat')}>
-            <AiAvatar size={36} />
-            <View style={{ marginLeft: 8 }}>
-              <Text style={ss.aiTitle}>Ask Bachein AI</Text>
-              <Text style={ss.aiSub}>Read · Draft · Send</Text>
-            </View>
+            <AiAvatar size={32} />
           </Pressable>
         </View>
 
@@ -67,10 +70,6 @@ export default function Home() {
           <>
             {/* Quick actions */}
             <View style={ss.quickRow}>
-              <Pressable testID="quick-create" style={ss.quick} onPress={() => router.push('/create')}>
-                <Ionicons name="add-circle" size={22} color={theme.colors.accent} />
-                <Text style={ss.quickText}>Create</Text>
-              </Pressable>
               <Pressable testID="quick-write" style={ss.quick} onPress={() => router.push('/editor')}>
                 <Ionicons name="create-outline" size={22} color={theme.colors.brand} />
                 <Text style={ss.quickText}>Write</Text>
@@ -83,14 +82,10 @@ export default function Home() {
                 <Ionicons name="lock-closed-outline" size={22} color={theme.colors.brand} />
                 <Text style={ss.quickText}>Vault</Text>
               </Pressable>
-            </View>
-
-            {/* Stats */}
-            <View style={ss.statsRow}>
-              <StatCard num={sent.length} label="Sent" />
-              <StatCard num={received.length} label="Received" />
-              <StatCard num={signed.length} label="Signed" />
-              <StatCard num={pending.length} label="Pending" />
+              <Pressable testID="quick-chat" style={ss.quick} onPress={() => router.push('/(tabs)/chat')}>
+                <Ionicons name="sparkles-outline" size={22} color={theme.colors.accent} />
+                <Text style={ss.quickText}>Bachein AI</Text>
+              </Pressable>
             </View>
 
             {recentReceived.length > 0 && (
@@ -141,7 +136,41 @@ export default function Home() {
           </>
         )}
       </ScrollView>
+
+      <Modal visible={drawer} transparent animationType="fade" onRequestClose={() => setDrawer(false)}>
+        <Pressable style={ss.drawerOverlay} onPress={() => setDrawer(false)} testID="drawer-overlay">
+          <Pressable style={ss.drawer} onPress={(e) => e.stopPropagation?.()}>
+            <View style={ss.drawerHead}>
+              <View style={ss.drawerAvatar}><Text style={ss.drawerAvatarTxt}>{(user?.name || '?').slice(0, 1).toUpperCase()}</Text></View>
+              <View style={{ flex: 1 }}>
+                <Text style={ss.drawerName}>{user?.name || '—'}</Text>
+                <Text style={ss.drawerEmail}>{user?.email || '—'}</Text>
+              </View>
+            </View>
+            <DrawerItem icon="home-outline" label="Home" onPress={() => setDrawer(false)} testID="drawer-home" />
+            <DrawerItem icon="add-circle-outline" label="Create Document" onPress={() => goTo('/create')} testID="drawer-create" />
+            <DrawerItem icon="create-outline" label="Write Document" onPress={() => goTo('/editor')} testID="drawer-write" />
+            <DrawerItem icon="folder-open-outline" label="Documents" onPress={() => goTo('/(tabs)/received')} testID="drawer-docs" />
+            <DrawerItem icon="sparkles-outline" label="Bachein AI" onPress={() => goTo('/(tabs)/chat')} testID="drawer-ai" />
+            <DrawerItem icon="construct-outline" label="File Kit" onPress={() => goTo('/(tabs)/filekit')} testID="drawer-tools" />
+            <DrawerItem icon="lock-closed-outline" label="Vault" onPress={() => goTo('/(tabs)/vault')} testID="drawer-vault" />
+            <DrawerItem icon="logo-github" label="GitHub Workspace" onPress={() => goTo('/github')} testID="drawer-github" />
+            <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
+            <DrawerItem icon="person-outline" label="Profile" onPress={() => goTo('/(tabs)/profile')} testID="drawer-profile" />
+            <DrawerItem icon="log-out-outline" label="Log out" onPress={logout} testID="drawer-logout" danger />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+function DrawerItem({ icon, label, onPress, testID, danger }: any) {
+  return (
+    <Pressable testID={testID} onPress={onPress} style={ss.drawerItem}>
+      <Ionicons name={icon} size={18} color={danger ? theme.colors.error : theme.colors.brand} />
+      <Text style={[ss.drawerText, danger && { color: theme.colors.error }]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -201,4 +230,14 @@ const ss = StyleSheet.create({
   emptySub: { color: theme.colors.muted, textAlign: 'center', marginTop: 8, lineHeight: 20 },
   emptyBtn: { backgroundColor: theme.colors.brand, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 999, marginTop: 20 },
   emptyBtnText: { color: theme.colors.onBrandPrimary, fontWeight: '500' },
+  menuBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', justifyContent: 'center' },
+  drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
+  drawer: { position: 'absolute', top: 0, bottom: 0, left: 0, width: 280, backgroundColor: theme.colors.surface, padding: 16, paddingTop: 40, borderRightWidth: 1, borderRightColor: theme.colors.border },
+  drawerHead: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, backgroundColor: theme.colors.card, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 16 },
+  drawerAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center' },
+  drawerAvatarTxt: { color: theme.colors.onBrandPrimary, fontSize: 16, fontWeight: '500' },
+  drawerName: { color: theme.colors.brand, fontSize: 15, fontWeight: '500' },
+  drawerEmail: { color: theme.colors.muted, fontSize: 11 },
+  drawerItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 12, paddingVertical: 12, borderRadius: 10 },
+  drawerText: { color: theme.colors.brand, fontSize: 14, fontWeight: '500' },
 });

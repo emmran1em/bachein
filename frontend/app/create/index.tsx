@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
 
 const CATEGORIES = [
+  { name: 'Normal PDF', icon: 'sparkles', secure: false, desc: 'AI document generator' },
   { name: 'NDA', icon: 'shield-checkmark', secure: true, desc: 'Non-disclosure agreement' },
   { name: 'Patent / IP Agreement', icon: 'bulb', secure: true, desc: 'IP protection' },
   { name: 'Legal Documents', icon: 'briefcase', secure: true, desc: 'Contracts & legal' },
@@ -16,7 +17,6 @@ const CATEGORIES = [
   { name: 'Investor Agreements', icon: 'trending-up', secure: true, desc: 'SAFE / Term sheets' },
   { name: 'Manufacturing Agreements', icon: 'cube', secure: true, desc: 'Supplier contracts' },
   { name: 'Secure PDF', icon: 'document-lock', secure: true, desc: 'Custom secure doc' },
-  { name: 'Normal PDF', icon: 'sparkles', secure: false, desc: 'AI document generator' },
 ];
 
 export default function CreatePicker() {
@@ -41,8 +41,7 @@ export default function CreatePicker() {
               testID={`category-${cat.name.replace(/\s+/g, '-').toLowerCase()}`}
               style={[s.tile, !cat.secure && s.tileAccent]}
               onPress={() => {
-                if (cat.secure) router.push({ pathname: '/create/secure', params: { category: cat.name } });
-                else router.push({ pathname: '/create/normal', params: { category: cat.name } });
+                router.push({ pathname: '/create/mode', params: { category: cat.name, secure: cat.secure ? '1' : '0' } });
               }}
             >
               <View style={s.tileTop}>
