@@ -1,10 +1,10 @@
 import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
-import { api, getUser } from '@/src/api';
+import { api, getUser, clearAuth } from '@/src/api';
 import { AiAvatar, BacheinLogo } from '@/src/components/Logo';
 
 function Section({ title, action, onAction, children, testID }: any) {
