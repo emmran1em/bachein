@@ -1,16 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
-import { api, uploadFile } from '@/src/api';
+import { api, uploadFile, getUser } from '@/src/api';
 import { useToast } from '@/src/components/Toast';
 import { playSent } from '@/src/lib/sound';
+import SignatureBottomSheet, { SignatureView, SignatureData } from '@/src/components/SignatureBottomSheet';
 
-type Step = 'intent' | 'draft' | 'attach' | 'security' | 'recipient';
+type Step = 'intent' | 'draft' | 'attach' | 'security' | 'sign' | 'recipient';
 
 const TOGGLES: { key: string; label: string; sub: string }[] = [
   { key: 'otp_verification', label: 'OTP Verification', sub: 'Email/SMS one-time code before access' },
@@ -50,6 +50,11 @@ export default function SecureCreate() {
   const [err, setErr] = useState('');
   const [attached, setAttached] = useState<Array<{ name: string; type: string; size: number; extracted_text?: string }>>([]);
   const [uploading, setUploading] = useState(false);
+  const [senderSig, setSenderSig] = useState<SignatureData | null>(null);
+  const [sigOpen, setSigOpen] = useState(false);
+  const [senderName, setSenderName] = useState<string>('');
+
+  useEffect(() => { getUser().then(u => setSenderName(u?.name || '')); }, []);
 
   const pickAndUpload = async () => {
     try {
@@ -87,6 +92,11 @@ export default function SecureCreate() {
       setErr('Recipient email is required and must be valid.');
       return;
     }
+    if (!senderSig) {
+      setErr('Please sign as Disclosing Party before sending.');
+      setStep('sign');
+      return;
+    }
     setSending(true); setErr('');
     try {
       const doc: any = await api.createDocument({
@@ -97,6 +107,7 @@ export default function SecureCreate() {
         recipient_email: recipient.trim() || undefined,
         security_config: config,
         attached_files: attached,
+        sender_signature: JSON.stringify(senderSig),
       });
       playSent();
       toast.show(`Sent to ${recipient.trim()} ✓`, 'success');
@@ -108,7 +119,11 @@ export default function SecureCreate() {
     <SafeAreaView style={s.container} edges={['top']} testID="create-secure-screen">
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={s.header}>
-          <Pressable onPress={() => step === 'intent' ? router.back() : setStep(step === 'recipient' ? 'security' : step === 'security' ? 'attach' : step === 'attach' ? 'draft' : 'intent')} style={s.closeBtn} testID="back-button">
+          <Pressable onPress={() => {
+            if (step === 'intent') return router.back();
+            const back: Record<Step, Step> = { draft: 'intent', attach: 'draft', security: 'attach', sign: 'security', recipient: 'sign', intent: 'intent' };
+            setStep(back[step]);
+          }} style={s.closeBtn} testID="back-button">
             <Ionicons name="chevron-back" size={22} color={theme.colors.brand} />
           </Pressable>
           <Text style={s.eyebrow}>{category} • SECURE</Text>
@@ -222,17 +237,59 @@ export default function SecureCreate() {
                   </View>
                 ))}
               </View>
-              <Pressable testID="goto-recipient-btn" style={s.primaryBtn} onPress={() => setStep('recipient')}>
+              <Pressable testID="goto-sign-btn" style={s.primaryBtn} onPress={() => setStep('sign')}>
                 <Text style={s.primaryBtnText}>Continue</Text>
                 <Ionicons name="arrow-forward" size={16} color={theme.colors.onBrandPrimary} />
               </Pressable>
             </>
           )}
 
+          {step === 'sign' && draft && (
+            <>
+              <Text style={s.title}>Sign as Disclosing Party</Text>
+              <Text style={s.subtitle}>You are legally binding this document. Your signature will appear at the &ldquo;Disclosing Party Signature&rdquo; line below.</Text>
+
+              <View style={s.docPreview}>
+                <Text style={s.previewMini} numberOfLines={2}>{draft.title}</Text>
+                <View style={s.divider} />
+                <Text style={s.previewLabel}>SIGNATURES</Text>
+
+                <View style={{ marginTop: 12 }}>
+                  <Text style={s.sigLine}>Disclosing Party Signature:</Text>
+                  {senderSig ? (
+                    <SignatureView data={senderSig} />
+                  ) : (
+                    <View style={s.emptySigLine} />
+                  )}
+                  <Text style={s.printedName}>Printed Name: {senderName || '________________'}</Text>
+                  <Text style={s.printedName}>Date: {new Date().toLocaleDateString()}</Text>
+                </View>
+
+                <View style={{ marginTop: 16 }}>
+                  <Text style={s.sigLine}>Receiving Party Signature:</Text>
+                  <View style={s.emptySigLine} />
+                  <Text style={[s.printedName, { color: theme.colors.muted }]}>To be filled by receiver</Text>
+                </View>
+              </View>
+
+              <Pressable testID="open-sig-sheet" style={[s.primaryBtn, { backgroundColor: senderSig ? theme.colors.brandSecondary : theme.colors.brand }]} onPress={() => setSigOpen(true)}>
+                <Ionicons name={senderSig ? 'refresh' : 'create-outline'} size={16} color={theme.colors.onBrandPrimary} />
+                <Text style={s.primaryBtnText}>{senderSig ? 'Change Signature' : 'Sign as Disclosing Party'}</Text>
+              </Pressable>
+              {senderSig && (
+                <Pressable testID="goto-recipient-btn" style={[s.primaryBtn, { marginTop: 10 }]} onPress={() => setStep('recipient')}>
+                  <Text style={s.primaryBtnText}>Continue to Send</Text>
+                  <Ionicons name="arrow-forward" size={16} color={theme.colors.onBrandPrimary} />
+                </Pressable>
+              )}
+              {err ? <Text style={s.err}>{err}</Text> : null}
+            </>
+          )}
+
           {step === 'recipient' && (
             <>
               <Text style={s.title}>Send to recipient</Text>
-              <Text style={s.subtitle}>Enter the recipient's email. They will receive a notification and complete verification before viewing.</Text>
+              <Text style={s.subtitle}>Enter the recipient&apos;s email. They will receive a notification and complete verification before viewing.</Text>
               <Text style={s.label}>Recipient email *</Text>
               <TextInput
                 testID="recipient-email-input"
@@ -256,6 +313,14 @@ export default function SecureCreate() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <SignatureBottomSheet
+        visible={sigOpen}
+        title="Sign as Disclosing Party"
+        role="This will be embedded in the NDA document."
+        onClose={() => setSigOpen(false)}
+        onDone={(sig) => { setSenderSig(sig); setSigOpen(false); }}
+      />
     </SafeAreaView>
   );
 }
@@ -287,4 +352,11 @@ const s = StyleSheet.create({
   fileRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 8 },
   fileName: { color: theme.colors.brand, fontSize: 13, fontWeight: '500' },
   fileMeta: { color: theme.colors.muted, fontSize: 11 },
+  docPreview: { backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: theme.colors.border, marginTop: 16 },
+  previewMini: { color: theme.colors.brand, fontWeight: '500', fontSize: 15 },
+  divider: { height: 1, backgroundColor: theme.colors.divider, marginVertical: 10 },
+  previewLabel: { color: theme.colors.muted, fontSize: 11, letterSpacing: 1 },
+  sigLine: { color: theme.colors.brand, fontSize: 13, marginBottom: 6 },
+  emptySigLine: { height: 42, borderBottomWidth: 1, borderBottomColor: theme.colors.borderStrong, marginBottom: 6 },
+  printedName: { color: theme.colors.onSurfaceSecondary, fontSize: 12, marginTop: 4 },
 });

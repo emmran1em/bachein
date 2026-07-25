@@ -18,20 +18,50 @@ def _decode_image(b64: str) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
 
+_FACE_CASCADE = None
+_PROFILE_CASCADE = None
+
+def _get_cascades():
+    global _FACE_CASCADE, _PROFILE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        _PROFILE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+    return _FACE_CASCADE, _PROFILE_CASCADE
+
+
+def _detect_faces_multi(gray: np.ndarray):
+    """Multi-pass detection with progressive leniency + histogram equalization + profile fallback."""
+    face_c, profile_c = _get_cascades()
+    eq = cv2.equalizeHist(gray)
+    passes = [
+        (1.1, 4, (60, 60)),
+        (1.1, 3, (40, 40)),
+        (1.2, 2, (30, 30)),
+        (1.3, 2, (24, 24)),
+    ]
+    for sf, mn, ms in passes:
+        for src in (gray, eq):
+            faces = face_c.detectMultiScale(src, scaleFactor=sf, minNeighbors=mn, minSize=ms)
+            if len(faces) > 0:
+                return faces
+            faces = profile_c.detectMultiScale(src, scaleFactor=sf, minNeighbors=mn, minSize=ms)
+            if len(faces) > 0:
+                return faces
+    return []
+
+
 def detect_face(img: np.ndarray) -> bool:
-    """Return True if at least one face is detected via Haar cascade."""
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    """Return True if at least one face is detected via Haar cascade (with multi-pass leniency)."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+    faces = _detect_faces_multi(gray)
     return len(faces) > 0
 
 
 def compute_face_hash(b64: str) -> str:
     """Return a perceptual hash of the largest detected face region."""
     img = _decode_image(b64)
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+    faces = _detect_faces_multi(gray)
     if len(faces) == 0:
         return ""
     # largest face

@@ -1,0 +1,39 @@
+{
+  "summary": "Backend-only verification of NDA + secure-document endpoints per E1 review request. All 16 pytest cases pass against the public Kubernetes preview URL. Covered: auth login (alice/bob), anonymous voice-oath-text, POST /documents with sender_signature (stored verbatim + sender_signed_at populated, receiver_signature null), POST /documents (no signature), sender-sign endpoint (200 for sender, 403 for receiver), voice-oath new shape on mismatch (200 with matched_words/said_words/required_words/attempts_used/attempts_left/transcript/similarity/message), voice_attempts persistence, 423 lock after 5 attempts, face-verify tiny-b64 rejection (400 'empty or too small'), face-verify faceless 100x100 JPEG rejection (400 'No face detected'), security-artifacts shape + 403 for outsider (carol), and status endpoint returning voice_attempts + sender_signed_at.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_nda_secure_v5.py",
+    "/app/test_reports/pytest/nda_v5_results.xml"
+  ],
+  "action_items": [
+    "Endpoints are green — safe to move on to frontend E2E for the NDA sender-sig / voice-oath / face-verify flows."
+  ],
+  "critical_code_review_comments": [
+    "server.py /documents/voice-oath correctly persists voice_attempts on every failure and short-circuits with 423 at attempts>=5 BEFORE calling Whisper — good, avoids wasted proxy calls.",
+    "server.py /documents/face-verify rejects <500-char b64 before decoding (cheap DoS guard), then falls through to has_face check via face_match.match; good ordering.",
+    "server.py /documents/{id}/security-artifacts exposes both parties' data with proper 403 gate on sender_id + recipient_email; audit_log returned intact.",
+    "DocumentOut model now correctly includes sender_signature, sender_signed_at, receiver_signature, voice_attempts — verified through response shape.",
+    "voice_match.match_words returns per-word booleans + normalized said tokens; API forwards these under matched_words/said_words as the frontend expects."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_nda_secure_v5.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (16/16 pytest)",
+    "frontend": "not tested (per E1 scope: backend-only)"
+  },
+  "seed_data_creation": "Created TEST_-prefixed NDA documents from alice@bachein.com to bob@bachein.com plus a carol_outsider@bachein.com user (via /auth/signup) for the 403 test. Test docs left in DB (safe — all prefixed with 'TEST_').",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reuse /app/backend/tests/test_nda_secure_v5.py as regression. Base URL comes from EXPO_PUBLIC_BACKEND_URL. Credentials in /app/memory/test_credentials.md. Doc creation with sender_signature must be a JSON *string*, not a nested object. Voice-oath returns 200 (not 400) on mismatch — clients must branch on `completed` field. After 5 failed attempts endpoint returns HTTP 423. Face-verify requires b64 length >=500 AND detectable face; a 100x100 solid-color JPEG is rejected as 'No face detected' (correct).",
+  "rca_of_issue": "N/A — no failures. All new endpoints behave exactly as specified by the review request."
+}

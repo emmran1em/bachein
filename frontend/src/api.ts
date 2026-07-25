@@ -93,6 +93,10 @@ export const api = {
     request('/documents/read-progress', { method: 'POST', body: JSON.stringify({ document_id, progress }) }),
   sign: (document_id: string, signature_base64: string) =>
     request('/documents/sign', { method: 'POST', body: JSON.stringify({ document_id, signature_base64 }) }),
+  senderSign: (document_id: string, signature_base64: string) =>
+    request(`/documents/${document_id}/sender-sign`, { method: 'POST', body: JSON.stringify({ signature_base64 }) }),
+  voiceOathText: () => request('/documents/voice-oath-text'),
+  securityArtifacts: (document_id: string) => request(`/documents/${document_id}/security-artifacts`),
   status: (id: string) => request(`/documents/${id}/status`),
   vault: () => request('/vault'),
   editorTypes: () => request('/editor/types'),

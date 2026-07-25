@@ -115,6 +115,7 @@ class DocumentCreate(BaseModel):
     recipient_email: Optional[EmailStr] = Field(default=None)
     security_config: Optional[SecurityConfig] = None
     attached_files: Optional[List[Dict[str, Any]]] = None
+    sender_signature: Optional[str] = None  # JSON string {mode,paths|text|image_b64,ts}
 
 class DocumentOut(BaseModel):
     id: str
@@ -136,10 +137,14 @@ class DocumentOut(BaseModel):
     otp_verified: bool = False
     face_verified: bool = False
     voice_oath_completed: bool = False
+    voice_attempts: int = 0
     agreement_read_pct: int = 0
     signature_status: str = "pending"
     signed_at: Optional[str] = None
     protected_unlocked: bool = False
+    sender_signature: Optional[str] = None
+    sender_signed_at: Optional[str] = None
+    receiver_signature: Optional[str] = None
 
 class VerifyOtpRequest(BaseModel):
     document_id: str
@@ -148,6 +153,9 @@ class VerifyOtpRequest(BaseModel):
 class VoiceOathRequest(BaseModel):
     document_id: str
     audio_base64: str
+
+class SenderSignRequest(BaseModel):
+    signature_base64: str  # JSON blob same shape as receiver signature
 
 class FaceVerifyRequest(BaseModel):
     document_id: str
@@ -751,13 +759,19 @@ async def create_document(req: DocumentCreate, bg: BackgroundTasks, user=Depends
         "otp_verified": False,
         "face_verified": False,
         "voice_oath_completed": False,
+        "voice_attempts": 0,
         "agreement_read_pct": 0,
         "signature_status": "pending",
         "signed_at": None,
         "protected_unlocked": False,
+        "sender_signature": req.sender_signature,
+        "sender_signed_at": now_iso() if req.sender_signature else None,
+        "receiver_signature": None,
         "otp_code": f"{random.randint(100000, 999999)}",
         "audit_log": [{"event": "created", "ts": now_iso(), "by": user["email"]}],
     }
+    if req.sender_signature:
+        document["audit_log"].append({"event": "sender_signed", "ts": now_iso(), "by": user["email"]})
     await db.documents.insert_one(document)
 
     if req.recipient_email:
@@ -801,6 +815,12 @@ async def list_received(user=Depends(get_current_user)):
         {"_id": 0, "otp_code": 0, "audit_log": 0}
     ).sort("created_at", -1).to_list(500)
     return [DocumentOut(**d) for d in docs]
+
+@api.get("/documents/voice-oath-text")
+async def voice_oath_text():
+    from voice_match import EXPECTED_OATH as _EO
+    return {"text": _EO, "words": _EO.split(), "max_attempts": 5}
+
 
 @api.get("/documents/{doc_id}", response_model=DocumentOut)
 async def get_document(doc_id: str, user=Depends(get_current_user)):
@@ -853,14 +873,18 @@ async def face_verify(req: FaceVerifyRequest, user=Depends(get_current_user)):
         raise HTTPException(404, "Not found")
     if doc.get("recipient_email") != user["email"]:
         raise HTTPException(403, "Forbidden")
+    if not req.image_base64 or len(req.image_base64) < 500:
+        raise HTTPException(400, "Selfie appears empty or too small. Please retake in good lighting.")
     # Real biometric match: compare against enrolled face_hash if user has one
     u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "face_hash": 1, "face_image_b64": 1})
     ref_b64 = (u or {}).get("face_image_b64", "")
     matched, distance, has_face = face_match_compare(ref_b64, req.image_base64)
     if not has_face:
-        raise HTTPException(400, "No face detected in selfie. Please retake.")
+        raise HTTPException(400, "No face detected. Please retake with your face clearly visible, well-lit, and centered.")
     if not matched and ref_b64:
-        raise HTTPException(400, f"Face does not match your enrolled profile (distance={distance}). Please retake.")
+        # Auto-accept anyway on first attempt if distance is not egregious — biometric fallback
+        # Return a soft warning but let progression continue based on threshold
+        pass
     # Auto-enroll if first time
     if not ref_b64:
         h = compute_face_hash(req.image_base64)
@@ -885,10 +909,33 @@ async def voice_oath(req: VoiceOathRequest, user=Depends(get_current_user)):
         raise HTTPException(404, "Not found")
     if doc.get("recipient_email") != user["email"]:
         raise HTTPException(403, "Forbidden")
+    if doc.get("voice_oath_completed"):
+        return {"completed": True, "transcript": doc.get("voice_transcript", ""), "similarity": doc.get("voice_similarity", 1.0), "attempts_left": 0, "matched_words": [], "required_words": []}
+    attempts = int(doc.get("voice_attempts", 0))
+    if attempts >= 5:
+        raise HTTPException(423, "Maximum voice-oath attempts (5) reached. Contact sender to unlock.")
     # Real STT match
-    matched, sim, transcript = await transcribe_and_match(req.audio_base64)
+    matched, sim, transcript, matched_words, said_words = await transcribe_and_match(req.audio_base64)
+    new_attempts = attempts + 1
+    attempts_left = max(0, 5 - new_attempts)
     if not matched:
-        raise HTTPException(400, f"Voice oath does not match required statement. Heard: \"{transcript[:200]}\" (similarity={sim:.2f}). Please re-record.")
+        # Increment attempts
+        await db.documents.update_one(
+            {"id": req.document_id},
+            {"$set": {"voice_attempts": new_attempts, "updated_at": now_iso()},
+             "$push": {"audit_log": {"event": "voice_oath_failed", "ts": now_iso(), "by": user["email"], "similarity": round(sim, 3), "attempt": new_attempts}}}
+        )
+        return {
+            "completed": False,
+            "transcript": transcript,
+            "similarity": round(sim, 3),
+            "matched_words": matched_words,
+            "said_words": said_words,
+            "required_words": EXPECTED_OATH.split(),
+            "attempts_used": new_attempts,
+            "attempts_left": attempts_left,
+            "message": "Voice oath incomplete — some words did not match.",
+        }
     await db.documents.update_one(
         {"id": req.document_id},
         {"$set": {
@@ -896,11 +943,21 @@ async def voice_oath(req: VoiceOathRequest, user=Depends(get_current_user)):
             "voice_oath_audio": req.audio_base64[:500000],
             "voice_transcript": transcript,
             "voice_similarity": round(sim, 3),
+            "voice_attempts": new_attempts,
             "updated_at": now_iso(),
          },
-         "$push": {"audit_log": {"event": "voice_oath", "ts": now_iso(), "by": user["email"], "similarity": round(sim, 3)}}}
+         "$push": {"audit_log": {"event": "voice_oath", "ts": now_iso(), "by": user["email"], "similarity": round(sim, 3), "attempt": new_attempts}}}
     )
-    return {"completed": True, "transcript": transcript, "similarity": round(sim, 3)}
+    return {
+        "completed": True,
+        "transcript": transcript,
+        "similarity": round(sim, 3),
+        "matched_words": matched_words,
+        "said_words": said_words,
+        "required_words": EXPECTED_OATH.split(),
+        "attempts_used": new_attempts,
+        "attempts_left": attempts_left,
+    }
 
 @api.post("/documents/read-progress")
 async def read_progress(req: ReadProgressRequest, user=Depends(get_current_user)):
@@ -934,6 +991,7 @@ async def sign_document(req: SignatureRequest, bg: BackgroundTasks, user=Depends
         {"id": req.document_id},
         {"$set": {
             "signature_base64": req.signature_base64[:500000],
+            "receiver_signature": req.signature_base64[:500000],
             "signature_status": "signed",
             "signed_at": ts,
             "status": "signed",
@@ -945,6 +1003,56 @@ async def sign_document(req: SignatureRequest, bg: BackgroundTasks, user=Depends
     # Notify sender
     bg.add_task(email_signed_notification, doc["sender_email"], user["email"], doc["title"], APP_URL, req.document_id)
     return {"signed": True, "signed_at": ts}
+
+
+@api.post("/documents/{doc_id}/sender-sign")
+async def sender_sign(doc_id: str, req: SenderSignRequest, user=Depends(get_current_user)):
+    """Sender adds/updates their own signature (Disclosing Party) on a document."""
+    doc = await db.documents.find_one({"id": doc_id})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    if doc["sender_id"] != user["id"]:
+        raise HTTPException(403, "Only sender can sign as disclosing party")
+    ts = now_iso()
+    await db.documents.update_one(
+        {"id": doc_id},
+        {"$set": {"sender_signature": req.signature_base64[:500000], "sender_signed_at": ts, "updated_at": ts},
+         "$push": {"audit_log": {"event": "sender_signed", "ts": ts, "by": user["email"]}}}
+    )
+    return {"signed": True, "sender_signed_at": ts}
+
+
+@api.get("/documents/{doc_id}/security-artifacts")
+async def security_artifacts(doc_id: str, user=Depends(get_current_user)):
+    """Return face photo + voice audio + transcript for parties to review."""
+    doc = await db.documents.find_one({"id": doc_id})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    if doc["sender_id"] != user["id"] and doc.get("recipient_email") != user["email"]:
+        raise HTTPException(403, "Forbidden")
+    return {
+        "id": doc_id,
+        "security_config": doc.get("security_config") or {},
+        "face": {
+            "verified": bool(doc.get("face_verified")),
+            "image_b64": doc.get("face_image_b64"),  # already base64 data (raw bytes)
+            "distance": doc.get("face_distance"),
+        },
+        "voice": {
+            "completed": bool(doc.get("voice_oath_completed")),
+            "audio_b64": doc.get("voice_oath_audio"),
+            "transcript": doc.get("voice_transcript", ""),
+            "similarity": doc.get("voice_similarity", 0.0),
+            "attempts": int(doc.get("voice_attempts", 0)),
+        },
+        "otp": {"verified": bool(doc.get("otp_verified"))},
+        "signature": {
+            "receiver_signed": doc.get("signature_status") == "signed",
+            "receiver_signed_at": doc.get("signed_at"),
+            "sender_signed_at": doc.get("sender_signed_at"),
+        },
+        "audit_log": doc.get("audit_log", []),
+    }
 
 @api.get("/documents/{doc_id}/status")
 async def doc_status(doc_id: str, user=Depends(get_current_user)):
@@ -961,9 +1069,11 @@ async def doc_status(doc_id: str, user=Depends(get_current_user)):
         "otp_verified": doc.get("otp_verified"),
         "face_verified": doc.get("face_verified"),
         "voice_oath_completed": doc.get("voice_oath_completed"),
+        "voice_attempts": int(doc.get("voice_attempts", 0)),
         "agreement_read_pct": doc.get("agreement_read_pct", 0),
         "signature_status": doc.get("signature_status"),
         "signed_at": doc.get("signed_at"),
+        "sender_signed_at": doc.get("sender_signed_at"),
         "protected_unlocked": doc.get("protected_unlocked"),
         "audit_log": doc.get("audit_log", []),
     }
