@@ -153,6 +153,7 @@ class VerifyOtpRequest(BaseModel):
 class VoiceOathRequest(BaseModel):
     document_id: str
     audio_base64: str
+    transcript: Optional[str] = None  # client-supplied (web Speech API) — if set, skip server Whisper
 
 class SenderSignRequest(BaseModel):
     signature_base64: str  # JSON blob same shape as receiver signature
@@ -914,8 +915,13 @@ async def voice_oath(req: VoiceOathRequest, user=Depends(get_current_user)):
     attempts = int(doc.get("voice_attempts", 0))
     if attempts >= 5:
         raise HTTPException(423, "Maximum voice-oath attempts (5) reached. Contact sender to unlock.")
-    # Real STT match
-    matched, sim, transcript, matched_words, said_words = await transcribe_and_match(req.audio_base64)
+    # Prefer client transcript when supplied (web live STT); else run Whisper on the audio
+    if req.transcript is not None and req.transcript.strip():
+        from voice_match import match_words as _match_words
+        m = _match_words(EXPECTED_OATH, req.transcript)
+        matched, sim, transcript, matched_words, said_words = m["matched"], m["similarity"], req.transcript, m["matched_words"], m["said_words"]
+    else:
+        matched, sim, transcript, matched_words, said_words = await transcribe_and_match(req.audio_base64)
     new_attempts = attempts + 1
     attempts_left = max(0, 5 - new_attempts)
     if not matched:

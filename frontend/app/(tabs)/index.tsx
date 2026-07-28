@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Modal } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +27,9 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const [filter, setFilter] = useState<'all' | 'pdf' | 'doc' | 'nda'>('all');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
 
   const load = async () => {
     try {
@@ -38,10 +41,32 @@ export default function Home() {
   };
   useFocusEffect(useCallback(() => { load(); }, []));
 
-  const signed = [...sent, ...received].filter(d => d.status === 'signed').slice(0, 4);
-  const pending = sent.filter(d => d.status === 'sent' || d.status === 'draft').slice(0, 4);
-  const recentReceived = received.slice(0, 3);
-  const recentEdited = sent.slice(0, 3);
+  // Filter helper — check whether a doc matches active filter + search
+  const matchFilter = (d: any) => {
+    if (filter === 'nda') {
+      if ((d.category || '').toUpperCase() !== 'NDA') return false;
+    } else if (filter === 'pdf') {
+      const hasPdf = (d.attached_files || []).some((f: any) => (f.name || '').toLowerCase().endsWith('.pdf') || (f.type || '').includes('pdf'));
+      if (!hasPdf && (d.category || '').toUpperCase() !== 'PDF') return false;
+    } else if (filter === 'doc') {
+      const hasDoc = (d.attached_files || []).some((f: any) => /\.docx?$/.test((f.name || '').toLowerCase()) || (f.type || '').includes('word') || (f.type || '').includes('officedocument'));
+      if (!hasDoc && (d.category || '').toUpperCase() !== 'DOC') return false;
+    }
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      const hay = `${d.title} ${d.category} ${d.sender_email} ${d.recipient_email || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+
+  const filteredSent = useMemo(() => sent.filter(matchFilter), [sent, filter, query]);
+  const filteredReceived = useMemo(() => received.filter(matchFilter), [received, filter, query]);
+
+  const signed = [...filteredSent, ...filteredReceived].filter(d => d.status === 'signed').slice(0, 4);
+  const pending = filteredSent.filter(d => d.status === 'sent' || d.status === 'draft').slice(0, 4);
+  const recentReceived = filteredReceived.slice(0, 3);
+  const recentEdited = filteredSent.slice(0, 3);
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
@@ -59,10 +84,33 @@ export default function Home() {
             <Text style={ss.greeting}>{greeting},</Text>
             <Text style={ss.name}>{user?.name || 'there'}</Text>
           </View>
+          <Pressable testID="home-search" style={ss.iconBtn} onPress={() => setSearchOpen((v) => !v)}>
+            <Ionicons name={searchOpen ? 'close' : 'search'} size={20} color={theme.colors.brand} />
+          </Pressable>
           <Pressable testID="home-ai" style={ss.aiCard} onPress={() => router.push('/(tabs)/chat')}>
             <AiAvatar size={32} />
           </Pressable>
         </View>
+
+        {searchOpen && (
+          <View style={ss.searchWrap}>
+            <Ionicons name="search-outline" size={16} color={theme.colors.muted} />
+            <TextInput
+              testID="home-search-input"
+              autoFocus
+              placeholder="Search documents by title, sender…"
+              placeholderTextColor={theme.colors.muted}
+              value={query}
+              onChangeText={setQuery}
+              style={ss.searchInput}
+            />
+            {!!query && (
+              <Pressable onPress={() => setQuery('')}>
+                <Ionicons name="close-circle" size={16} color={theme.colors.muted} />
+              </Pressable>
+            )}
+          </View>
+        )}
 
         {loading ? (
           <ActivityIndicator style={{ marginTop: 40 }} color={theme.colors.brand} />
@@ -86,6 +134,26 @@ export default function Home() {
                 <Ionicons name="sparkles-outline" size={22} color={theme.colors.accent} />
                 <Text style={ss.quickText}>Bachein AI</Text>
               </Pressable>
+            </View>
+
+            {/* Filter chips */}
+            <View style={ss.filterRow}>
+              {([
+                { k: 'all', label: 'All', icon: 'apps-outline' as const },
+                { k: 'pdf', label: 'PDF', icon: 'document-outline' as const },
+                { k: 'doc', label: 'DOC', icon: 'document-text-outline' as const },
+                { k: 'nda', label: 'NDA', icon: 'shield-checkmark-outline' as const },
+              ] as const).map(({ k, label, icon }) => (
+                <Pressable
+                  key={k}
+                  testID={`filter-${k}`}
+                  onPress={() => setFilter(k)}
+                  style={[ss.chip, filter === k && ss.chipActive]}
+                >
+                  <Ionicons name={icon} size={13} color={filter === k ? '#fff' : theme.colors.brand} />
+                  <Text style={[ss.chipText, filter === k && ss.chipTextActive]}>{label}</Text>
+                </Pressable>
+              ))}
             </View>
 
             {recentReceived.length > 0 && (
@@ -130,6 +198,18 @@ export default function Home() {
                 <Text style={ss.emptySub}>Create your first document or ask Bachein AI to draft one for you.</Text>
                 <Pressable testID="empty-create-btn" style={ss.emptyBtn} onPress={() => router.push('/create')}>
                   <Text style={ss.emptyBtnText}>Create your first document</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {(sent.length > 0 || received.length > 0) && filteredSent.length === 0 && filteredReceived.length === 0 && (
+              <View style={ss.emptyFilter} testID="filter-empty">
+                <Ionicons name="funnel-outline" size={24} color={theme.colors.muted} />
+                <Text style={ss.emptyFilterText}>
+                  {query ? `No matches for “${query}”` : `No ${filter.toUpperCase()} documents yet`}
+                </Text>
+                <Pressable onPress={() => { setFilter('all'); setQuery(''); }}>
+                  <Text style={ss.emptyFilterClear}>Clear filters</Text>
                 </Pressable>
               </View>
             )}
@@ -209,6 +289,17 @@ const ss = StyleSheet.create({
   greeting: { color: theme.colors.muted, fontSize: 13 },
   name: { color: theme.colors.brand, fontSize: 24, fontWeight: '500', letterSpacing: -0.5 },
   aiCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.card },
+  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 12, paddingHorizontal: 12, marginTop: 12, height: 42 },
+  searchInput: { flex: 1, color: theme.colors.brand, fontSize: 14, paddingVertical: 0 },
+  filterRow: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.card },
+  chipActive: { backgroundColor: theme.colors.brand, borderColor: theme.colors.brand },
+  chipText: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
+  chipTextActive: { color: '#fff' },
+  emptyFilter: { alignItems: 'center', marginTop: 60, gap: 8 },
+  emptyFilterText: { color: theme.colors.muted, fontSize: 14, marginTop: 4 },
+  emptyFilterClear: { color: theme.colors.accent, fontSize: 12, fontWeight: '500', marginTop: 4 },
   aiTitle: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
   aiSub: { color: theme.colors.muted, fontSize: 10 },
   quickRow: { flexDirection: 'row', gap: 8, marginTop: 20 },

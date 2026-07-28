@@ -87,8 +87,8 @@ export const api = {
     request('/documents/verify-otp', { method: 'POST', body: JSON.stringify({ document_id, otp }) }),
   faceVerify: (document_id: string, image_base64: string) =>
     request('/documents/face-verify', { method: 'POST', body: JSON.stringify({ document_id, image_base64 }) }),
-  voiceOath: (document_id: string, audio_base64: string) =>
-    request('/documents/voice-oath', { method: 'POST', body: JSON.stringify({ document_id, audio_base64 }) }),
+  voiceOath: (document_id: string, audio_base64: string, transcript?: string) =>
+    request('/documents/voice-oath', { method: 'POST', body: JSON.stringify({ document_id, audio_base64, transcript }) }),
   readProgress: (document_id: string, progress: number) =>
     request('/documents/read-progress', { method: 'POST', body: JSON.stringify({ document_id, progress }) }),
   sign: (document_id: string, signature_base64: string) =>
