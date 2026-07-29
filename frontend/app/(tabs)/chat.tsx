@@ -44,8 +44,68 @@ export default function AiWorkspace() {
   const [byoBusy, setByoBusy] = useState(false);
   const [byoError, setByoError] = useState('');
   const [voiceOn, setVoiceOn] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const scrollRef = useRef<ScrollView>(null);
   const recogRef = useRef<any>(null);
+
+  // Date grouping for chat history
+  const formatRelative = (iso: string) => {
+    try {
+      const then = new Date(iso).getTime();
+      const now = Date.now();
+      const diffMin = Math.floor((now - then) / 60000);
+      if (diffMin < 1) return 'just now';
+      if (diffMin < 60) return `${diffMin}m ago`;
+      if (diffMin < 60 * 24) return `${Math.floor(diffMin / 60)}h ago`;
+      const days = Math.floor(diffMin / (60 * 24));
+      if (days === 1) return 'yesterday';
+      if (days < 7) return `${days} days ago`;
+      return new Date(iso).toLocaleDateString();
+    } catch { return ''; }
+  };
+
+  const groupedConvs = useMemo(() => {
+    const q = historyQuery.trim().toLowerCase();
+    const filtered = q ? convs.filter((c) => c.title.toLowerCase().includes(q) || c.provider.toLowerCase().includes(q)) : convs;
+    // Split pinned first, then group by date
+    const pinned = filtered.filter((c) => c.pinned);
+    const rest = filtered.filter((c) => !c.pinned);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const yest = new Date(today.getTime() - 86400000);
+    const weekAgo = new Date(today.getTime() - 6 * 86400000);
+    const monthAgo = new Date(today.getTime() - 30 * 86400000);
+    const buckets = { today: [] as Conv[], yesterday: [] as Conv[], week: [] as Conv[], month: [] as Conv[], older: [] as Conv[] };
+    rest.forEach((c) => {
+      const t = new Date(c.updated_at);
+      if (t >= today) buckets.today.push(c);
+      else if (t >= yest) buckets.yesterday.push(c);
+      else if (t >= weekAgo) buckets.week.push(c);
+      else if (t >= monthAgo) buckets.month.push(c);
+      else buckets.older.push(c);
+    });
+    const out: any[] = [];
+    if (pinned.length) { out.push({ type: 'header', title: 'PINNED' }); pinned.forEach((c) => out.push({ ...c, type: 'conv' })); }
+    if (buckets.today.length) { out.push({ type: 'header', title: 'TODAY' }); buckets.today.forEach((c) => out.push({ ...c, type: 'conv' })); }
+    if (buckets.yesterday.length) { out.push({ type: 'header', title: 'YESTERDAY' }); buckets.yesterday.forEach((c) => out.push({ ...c, type: 'conv' })); }
+    if (buckets.week.length) { out.push({ type: 'header', title: 'THIS WEEK' }); buckets.week.forEach((c) => out.push({ ...c, type: 'conv' })); }
+    if (buckets.month.length) { out.push({ type: 'header', title: 'LAST 30 DAYS' }); buckets.month.forEach((c) => out.push({ ...c, type: 'conv' })); }
+    if (buckets.older.length) { out.push({ type: 'header', title: 'OLDER' }); buckets.older.forEach((c) => out.push({ ...c, type: 'conv' })); }
+    return out;
+  }, [convs, historyQuery]);
+
+  const startRename = (c: Conv) => { setRenamingId(c.id); setRenameValue(c.title); };
+  const commitRename = async (id: string) => {
+    const val = renameValue.trim();
+    setRenamingId(null);
+    if (!val || val.length < 1) return;
+    try {
+      await api.aiwPatchConversation(id, { title: val });
+      const r: any = await api.aiwConversations();
+      setConvs(r.conversations);
+    } catch {}
+  };
 
   // Load providers, settings, convs
   useEffect(() => {
@@ -380,26 +440,69 @@ export default function AiWorkspace() {
                 <Ionicons name="close" size={20} color={theme.colors.brand} />
               </Pressable>
             </View>
-            <FlatList
-              data={convs}
-              keyExtractor={(c) => c.id}
-              contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-              ListEmptyComponent={<Text style={s.emptyHist}>No chats yet. Start one!</Text>}
-              renderItem={({ item }) => (
-                <Pressable style={s.convRow} onPress={() => openConv(item.id)} testID={`conv-${item.id}`}>
-                  <View style={s.convIcon}><Ionicons name={item.pinned ? 'pin' : 'chatbubble-ellipses-outline'} size={14} color={theme.colors.brand} /></View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.convTitle} numberOfLines={1}>{item.title}</Text>
-                    <Text style={s.convMeta}>{new Date(item.updated_at).toLocaleString()} · {item.provider}</Text>
-                  </View>
-                  <Pressable style={s.convAction} onPress={() => savePinned(item.id, !item.pinned)} testID={`pin-${item.id}`}>
-                    <Ionicons name={item.pinned ? 'pin' : 'pin-outline'} size={16} color={item.pinned ? theme.colors.accent : theme.colors.muted} />
-                  </Pressable>
-                  <Pressable style={s.convAction} onPress={() => deleteConv(item.id)} testID={`del-${item.id}`}>
-                    <Ionicons name="trash-outline" size={16} color={theme.colors.muted} />
-                  </Pressable>
+
+            {/* Search */}
+            <View style={s.searchBar}>
+              <Ionicons name="search" size={14} color={theme.colors.muted} />
+              <TextInput
+                testID="history-search"
+                value={historyQuery}
+                onChangeText={setHistoryQuery}
+                placeholder="Search chats…"
+                placeholderTextColor={theme.colors.muted}
+                style={s.searchInput}
+              />
+              {!!historyQuery && (
+                <Pressable onPress={() => setHistoryQuery('')}>
+                  <Ionicons name="close-circle" size={14} color={theme.colors.muted} />
                 </Pressable>
               )}
+            </View>
+
+            <FlatList
+              data={groupedConvs}
+              keyExtractor={(item, i) => item.type === 'header' ? `h-${item.title}-${i}` : `c-${(item as any).id}`}
+              contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+              ListEmptyComponent={<Text style={s.emptyHist}>{historyQuery ? 'No matches' : 'No chats yet. Start one!'}</Text>}
+              renderItem={({ item }) => {
+                if (item.type === 'header') {
+                  return <Text style={s.groupHeader}>{item.title}</Text>;
+                }
+                const c = item as any as Conv;
+                const isRenaming = renamingId === c.id;
+                return (
+                  <View style={s.convRow} testID={`conv-${c.id}`}>
+                    <Pressable style={{ flexDirection: 'row', flex: 1, alignItems: 'center', gap: 10 }} onPress={() => !isRenaming && openConv(c.id)}>
+                      <View style={s.convIcon}><Ionicons name={c.pinned ? 'pin' : 'chatbubble-ellipses-outline'} size={14} color={theme.colors.brand} /></View>
+                      <View style={{ flex: 1 }}>
+                        {isRenaming ? (
+                          <TextInput
+                            testID={`rename-input-${c.id}`}
+                            style={s.renameInput}
+                            value={renameValue}
+                            onChangeText={setRenameValue}
+                            autoFocus
+                            onSubmitEditing={() => commitRename(c.id)}
+                            onBlur={() => commitRename(c.id)}
+                          />
+                        ) : (
+                          <Text style={s.convTitle} numberOfLines={1}>{c.title}</Text>
+                        )}
+                        <Text style={s.convMeta}>{formatRelative(c.updated_at)} · {c.provider}</Text>
+                      </View>
+                    </Pressable>
+                    <Pressable style={s.convAction} onPress={() => savePinned(c.id, !c.pinned)} testID={`pin-${c.id}`}>
+                      <Ionicons name={c.pinned ? 'pin' : 'pin-outline'} size={16} color={c.pinned ? theme.colors.accent : theme.colors.muted} />
+                    </Pressable>
+                    <Pressable style={s.convAction} onPress={() => startRename(c)} testID={`rename-${c.id}`}>
+                      <Ionicons name="pencil-outline" size={16} color={theme.colors.muted} />
+                    </Pressable>
+                    <Pressable style={s.convAction} onPress={() => deleteConv(c.id)} testID={`del-${c.id}`}>
+                      <Ionicons name="trash-outline" size={16} color={theme.colors.muted} />
+                    </Pressable>
+                  </View>
+                );
+              }}
             />
           </View>
         </View>
@@ -479,4 +582,8 @@ const s = StyleSheet.create({
   convTitle: { color: theme.colors.brand, fontSize: 13, fontWeight: '500' },
   convMeta: { color: theme.colors.muted, fontSize: 11, marginTop: 2 },
   convAction: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 20, marginTop: 6, backgroundColor: theme.colors.card, borderRadius: 12, paddingHorizontal: 12, height: 40, borderWidth: 1, borderColor: theme.colors.border },
+  searchInput: { flex: 1, color: theme.colors.brand, fontSize: 13, paddingVertical: 0 },
+  groupHeader: { color: theme.colors.muted, fontSize: 10, letterSpacing: 1, fontWeight: '500', marginTop: 14, marginBottom: 6, paddingHorizontal: 4 },
+  renameInput: { color: theme.colors.brand, fontSize: 13, fontWeight: '500', borderBottomWidth: 1, borderBottomColor: theme.colors.brand, paddingVertical: 2 },
 });

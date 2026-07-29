@@ -7,6 +7,7 @@ import { useAudioPlayer } from 'expo-audio';
 import { theme } from '@/src/theme';
 import { api, getUser, getToken } from '@/src/api';
 import { SignatureView, SignatureData } from '@/src/components/SignatureBottomSheet';
+import AskBachein from '@/src/components/AskBachein';
 
 function Row({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
   return (
@@ -48,6 +49,8 @@ export default function DocumentView() {
   const [artifacts, setArtifacts] = useState<any>(null);
   const [artLoading, setArtLoading] = useState(false);
   const [imgViewer, setImgViewer] = useState<string | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
+  const [askText, setAskText] = useState('');
 
   const load = async () => {
     try {
@@ -314,6 +317,24 @@ export default function DocumentView() {
           {imgViewer && <Image source={{ uri: imgViewer }} style={{ width: '90%', height: '80%', resizeMode: 'contain' }} />}
         </Pressable>
       </Modal>
+
+      {/* Ask BacheIn floating button */}
+      <Pressable
+        testID="ask-bachein-fab"
+        style={ss.askFab}
+        onLongPress={() => { setAskText(doc.content?.slice(0, 500) || ''); setAskOpen(true); }}
+        onPress={() => { setAskText(''); setAskOpen(true); }}
+      >
+        <Ionicons name="sparkles" size={18} color="#fff" />
+        <Text style={ss.askFabText}>Ask BacheIn</Text>
+      </Pressable>
+
+      <AskBachein
+        visible={askOpen}
+        onClose={() => setAskOpen(false)}
+        initialText={askText}
+        context={doc.content?.slice(0, 3000)}
+      />
     </SafeAreaView>
   );
 }
@@ -373,4 +394,6 @@ const ss = StyleSheet.create({
   auditEvent: { color: theme.colors.brand, fontSize: 12, textTransform: 'capitalize', fontWeight: '500' },
   auditMeta: { color: theme.colors.muted, fontSize: 11 },
   imgOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', alignItems: 'center', justifyContent: 'center' },
+  askFab: { position: 'absolute', bottom: 24, right: 20, backgroundColor: theme.colors.brand, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 999, flexDirection: 'row', alignItems: 'center', gap: 6, ...Platform.select({ web: { boxShadow: '0 4px 16px rgba(0,0,0,0.2)' } as any, default: { elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 } }) },
+  askFabText: { color: '#fff', fontWeight: '500', fontSize: 13, letterSpacing: 0.2 },
 });

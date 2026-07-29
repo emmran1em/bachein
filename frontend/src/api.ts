@@ -98,6 +98,13 @@ export const api = {
     request(`/aiw/conversations/${id}`, { method: 'DELETE' }),
   aiwChat: (body: { conversation_id?: string; message: string; provider?: string; quick_action?: string; attachments?: any[] }) =>
     request('/aiw/chat', { method: 'POST', body: JSON.stringify(body) }),
+  aiwExplain: (body: { text: string; context?: string; style?: string; provider?: string }) =>
+    request('/aiw/explain', { method: 'POST', body: JSON.stringify(body) }),
+  aiwQuestionPaper: (body: any) =>
+    request('/aiw/question-paper', { method: 'POST', body: JSON.stringify(body) }),
+  aiwQuestionPapers: () => request('/aiw/question-papers'),
+  aiwQuestionPaper1: (id: string) => request(`/aiw/question-papers/${id}`),
+  aiwQuestionPaperPdfUrl: (id: string) => `${BASE}/api/aiw/question-papers/${id}/pdf`,
   createDocument: (body: any) =>
     request('/documents', { method: 'POST', body: JSON.stringify(body) }),
   listSent: () => request('/documents/sent'),

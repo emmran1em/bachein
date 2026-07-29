@@ -557,4 +557,244 @@ def build_ai_router(db, get_current_user):
             "disclaimer": "AI can make mistakes. Please double-check important information.",
         }
 
+    # ============== Phase 3 — Ask BacheIn (floating explain) ==============
+    class ExplainIn(BaseModel):
+        text: str
+        context: Optional[str] = None
+        style: Optional[str] = "simple"  # simple | detailed | eli5 | technical
+        provider: Optional[str] = None
+
+    @router.post("/explain")
+    async def explain(body: ExplainIn, user=Depends(get_current_user)):
+        settings = await _get_user_settings(user["id"])
+        pid = body.provider or settings.get("default_provider", "gemini")
+        auth = await _pick_key(user, pid)
+        # Quota
+        if auth["source"] != "byo":
+            limits = _limits(settings.get("tier", "free"))
+            used = await _quota_used(user["id"])
+            if used["daily"] >= limits["daily"] or used["monthly"] >= limits["monthly"]:
+                raise HTTPException(402, "AI quota reached. Connect your own key to keep asking.")
+
+        style_map = {
+            "simple": "Explain in very simple plain English, as if to a curious 12-year-old. Use short sentences.",
+            "detailed": "Give a thorough, well-structured explanation with examples.",
+            "eli5": "Explain like I'm 5. Use analogies. Keep it 3 sentences max.",
+            "technical": "Give a precise technical explanation with correct terminology.",
+        }
+        instr = style_map.get(body.style or "simple", style_map["simple"])
+        ctx = f"\n\nContext (surrounding text):\n{body.context[:2000]}" if body.context else ""
+        prompt = (
+            f"{instr}\n\nExplain the following selection:\n\n---\n{body.text[:3000]}\n---{ctx}\n\n"
+            "Return a clean explanation only — no preamble like 'sure' or 'here is'."
+        )
+        system = "You are Bachein's inline document explainer. Be precise, friendly, and brief."
+        try:
+            reply = await _call_llm(auth, system, prompt, f"explain-{uuid.uuid4()}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"AI error: {e}")
+        if auth["source"] != "byo":
+            await _consume_quota(user["id"])
+        return {"explanation": reply, "provider": pid, "source": auth["source"],
+                "disclaimer": "AI can make mistakes. Please double-check important information."}
+
+    # ============== Phase 4 — Question Paper Creator ==============
+    class QuestionPaperIn(BaseModel):
+        board: str          # CBSE | ICSE | State | IB | Other
+        class_level: str    # 6-12
+        subject: str
+        chapters: List[str]
+        total_marks: int = 80
+        duration_minutes: int = 180
+        difficulty: str = "mixed"   # easy | medium | hard | mixed
+        include_case_studies: bool = True
+        include_diagrams: bool = True
+        include_maps: bool = False
+        include_graphs: bool = False
+        include_tables: bool = True
+        num_sections: int = 5
+        language: str = "English"
+        provider: Optional[str] = None
+
+    @router.post("/question-paper")
+    async def create_question_paper(body: QuestionPaperIn, user=Depends(get_current_user)):
+        settings = await _get_user_settings(user["id"])
+        pid = body.provider or settings.get("default_provider", "gemini")
+        auth = await _pick_key(user, pid)
+        if auth["source"] != "byo":
+            limits = _limits(settings.get("tier", "free"))
+            used = await _quota_used(user["id"])
+            if used["daily"] >= limits["daily"] or used["monthly"] >= limits["monthly"]:
+                raise HTTPException(402, "AI quota reached. Connect your own key.")
+
+        system = (
+            "You are an expert board-exam question paper setter. "
+            "You have deep knowledge of previous year papers, syllabus, marking schemes, and chapter weightage. "
+            "Generate authentic, exam-ready question papers with correct pattern, difficulty distribution, and marks. "
+            "You MUST output as strict JSON — no prose outside the JSON block."
+        )
+        prompt = (
+            f"Create a {body.board} Class {body.class_level} {body.subject} question paper.\n"
+            f"Chapters to cover: {', '.join(body.chapters) if body.chapters else 'all'}\n"
+            f"Total marks: {body.total_marks} · Duration: {body.duration_minutes} min · Difficulty: {body.difficulty} · Language: {body.language}\n"
+            f"Include: case_studies={body.include_case_studies}, diagrams={body.include_diagrams}, maps={body.include_maps}, "
+            f"graphs={body.include_graphs}, tables={body.include_tables}\n"
+            f"Sections: {body.num_sections}\n\n"
+            "Analyze previous-year trends and chapter weightage to prioritize the MOST PROBABLE questions.\n\n"
+            "Return ONLY this JSON schema (no markdown fences, just raw JSON):\n"
+            "{\n"
+            '  "title": "string",\n'
+            '  "meta": {"board":"", "class":"", "subject":"", "total_marks":0, "duration":"", "language":""},\n'
+            '  "general_instructions": ["string", ...],\n'
+            '  "sections": [\n'
+            '    {"name":"Section A","description":"", "questions":[\n'
+            '       {"q_no":"1","marks":1,"type":"MCQ|SA|LA|VSA|case_study","text":"","options":["a","b","c","d"],"answer":null,\n'
+            '        "figure":{"kind":"diagram|map|graph|table|none","caption":"","ascii":"","description":""},\n'
+            '        "sub_questions":[]}\n'
+            '     ]}\n'
+            '  ],\n'
+            '  "answer_key_available": true\n'
+            "}\n\n"
+            "Rules:\n"
+            "- Distribute marks EXACTLY to the total.\n"
+            "- Include case studies if requested with 3-4 sub-parts each.\n"
+            "- For diagrams/maps/graphs/tables, add 'figure' with ASCII/text description that a PDF renderer can transform into an image (be concrete).\n"
+            "- MCQs must include 4 options.\n"
+            "- Base weightage on typical previous-year patterns."
+        )
+        try:
+            raw = await _call_llm(auth, system, prompt, f"qp-{uuid.uuid4()}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"AI error: {e}")
+        if auth["source"] != "byo":
+            await _consume_quota(user["id"])
+
+        # Try to parse the JSON out of the model response
+        import json as _json, re as _re
+        parsed = None
+        # Try direct parse
+        try: parsed = _json.loads(raw)
+        except Exception:
+            # Strip code fences and re-try
+            m = _re.search(r"\{[\s\S]*\}", raw)
+            if m:
+                try: parsed = _json.loads(m.group(0))
+                except Exception: parsed = None
+
+        # Persist
+        paper_id = str(uuid.uuid4())
+        record = {
+            "id": paper_id,
+            "user_id": user["id"],
+            "params": body.dict(),
+            "raw_text": raw,
+            "paper": parsed,
+            "created_at": _now_iso(),
+        }
+        await db.question_papers.insert_one(dict(record))
+
+        return {
+            "id": paper_id,
+            "paper": parsed,
+            "raw_text": raw if parsed is None else None,
+            "parsed": bool(parsed),
+            "provider": pid,
+            "source": auth["source"],
+            "disclaimer": "AI can make mistakes. Please verify against the official syllabus and previous year papers.",
+        }
+
+    @router.get("/question-papers")
+    async def list_question_papers(user=Depends(get_current_user)):
+        items = await db.question_papers.find({"user_id": user["id"]}, {"_id": 0, "raw_text": 0}).sort("created_at", -1).to_list(50)
+        return {"items": items}
+
+    @router.get("/question-papers/{qp_id}")
+    async def get_question_paper(qp_id: str, user=Depends(get_current_user)):
+        p = await db.question_papers.find_one({"id": qp_id, "user_id": user["id"]}, {"_id": 0})
+        if not p: raise HTTPException(404, "Not found")
+        return p
+
+    @router.get("/question-papers/{qp_id}/pdf")
+    async def question_paper_pdf(qp_id: str, user=Depends(get_current_user)):
+        from fastapi.responses import Response
+        p = await db.question_papers.find_one({"id": qp_id, "user_id": user["id"]}, {"_id": 0})
+        if not p: raise HTTPException(404, "Not found")
+        # Render to PDF
+        pdf_bytes = _render_paper_pdf(p.get("paper") or {}, p.get("params", {}))
+        return Response(content=pdf_bytes, media_type="application/pdf",
+                        headers={"Content-Disposition": f"inline; filename=question-paper-{qp_id}.pdf"})
+
     return router
+
+
+def _render_paper_pdf(paper: dict, params: dict) -> bytes:
+    """Simple ReportLab renderer for question papers."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    import io as _io, textwrap as _tw
+
+    buf = _io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    W, H = A4
+    x0, y0 = 2 * cm, H - 2 * cm
+
+    def line(text, y, size=10, bold=False):
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+        c.drawString(x0, y, text[:120])
+
+    def wrap(text, y, size=10, indent=0, bold=False):
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+        for chunk in _tw.wrap(text, width=90):
+            c.drawString(x0 + indent, y, chunk)
+            y -= size + 3
+        return y
+
+    title = paper.get("title") or f"{params.get('board','')} Class {params.get('class_level','')} — {params.get('subject','')} Question Paper"
+    line(title, y0, 14, True); y = y0 - 22
+    meta = paper.get("meta") or {}
+    metaline = f"Total Marks: {params.get('total_marks','')} · Duration: {params.get('duration_minutes','')} min · Language: {params.get('language','English')}"
+    line(metaline, y, 10); y -= 20
+
+    gi = paper.get("general_instructions") or []
+    if gi:
+        line("General Instructions:", y, 11, True); y -= 14
+        for i, ins in enumerate(gi, 1):
+            y = wrap(f"{i}. {ins}", y, 10, indent=8)
+        y -= 6
+
+    sections = paper.get("sections") or []
+    for sec in sections:
+        if y < 3 * cm: c.showPage(); y = H - 2 * cm
+        line(sec.get("name", "Section"), y, 12, True); y -= 14
+        if sec.get("description"):
+            y = wrap(sec.get("description"), y, 9, indent=0)
+        y -= 4
+        for q in (sec.get("questions") or []):
+            if y < 3 * cm: c.showPage(); y = H - 2 * cm
+            qn = q.get("q_no", "")
+            marks = q.get("marks", "")
+            head = f"Q{qn}. ({marks}m) [{q.get('type','')}]"
+            line(head, y, 10, True); y -= 12
+            y = wrap(q.get("text", ""), y, 10, indent=12)
+            opts = q.get("options") or []
+            for i, o in enumerate(opts):
+                y = wrap(f"({chr(97+i)}) {o}", y, 9, indent=24)
+            fig = q.get("figure") or {}
+            if fig and fig.get("kind") not in (None, "", "none"):
+                y = wrap(f"[Figure — {fig.get('kind','')}: {fig.get('caption','')}]", y, 9, indent=16, bold=True)
+                if fig.get("ascii"):
+                    for ln in (fig.get("ascii") or "").splitlines():
+                        c.setFont("Courier", 8)
+                        c.drawString(x0 + 20, y, ln[:80])
+                        y -= 10
+            sqs = q.get("sub_questions") or []
+            for j, sq in enumerate(sqs):
+                y = wrap(f"({chr(97+j)}) {sq if isinstance(sq, str) else sq.get('text', '')}", y, 9, indent=24)
+            y -= 4
+    c.showPage(); c.save()
+    return buf.getvalue()

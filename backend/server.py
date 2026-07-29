@@ -823,6 +823,31 @@ async def voice_oath_text():
     return {"text": _EO, "words": _EO.split(), "max_attempts": 5}
 
 
+@api.get("/documents/voice-oath-azure-token")
+async def voice_oath_azure_token(user=Depends(get_current_user)):
+    """Return a short-lived Azure Speech token (~10 min) so the browser SDK can stream directly.
+    Never exposes the subscription key to the client.
+    """
+    import httpx
+    az_key = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+    az_region = os.environ.get("AZURE_SPEECH_REGION", "").strip()
+    if not az_key or not az_region:
+        raise HTTPException(503, "Azure Speech not configured on this server")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"https://{az_region}.api.cognitive.microsoft.com/sts/v1.0/issueToken",
+                headers={"Ocp-Apim-Subscription-Key": az_key, "Content-Length": "0"},
+            )
+        if r.status_code != 200:
+            raise HTTPException(502, f"Azure token failed: {r.status_code}")
+        return {"token": r.text, "region": az_region}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Azure token error: {e}")
+
+
 @api.get("/documents/{doc_id}", response_model=DocumentOut)
 async def get_document(doc_id: str, user=Depends(get_current_user)):
     doc = await db.documents.find_one({"id": doc_id}, {"_id": 0, "otp_code": 0, "audit_log": 0})
