@@ -1313,6 +1313,12 @@ async def file_compress_pdf(file: UploadFile = File(...), user=Depends(get_curre
 # Include
 app.include_router(api)
 
+# Mount AI Workspace router (provider-agnostic)
+from ai_workspace import build_ai_router
+_ai_router = build_ai_router(db, get_current_user)
+# Mount under the same /api prefix
+app.include_router(_ai_router, prefix="/api")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

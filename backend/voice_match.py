@@ -66,8 +66,11 @@ def match_words(expected: str, transcript: str) -> Dict[str, Any]:
 
 
 async def transcribe_and_match(audio_base64: str, expected: str = EXPECTED_OATH) -> Tuple[bool, float, str, List[bool], List[str]]:
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
-    if not api_key or not audio_base64:
+    api_key = os.environ.get("BACHEIN_OPENAI_KEY", "").strip()
+    # Guard: no real OpenAI key configured → don't call Whisper (would 401 with emergent key)
+    if not api_key or not api_key.startswith("sk-"):
+        return False, 0.0, "[server transcription unavailable — please use a browser that supports Web Speech API (Chrome, Edge, Safari) or ask sender to disable voice oath]", [], []
+    if not audio_base64:
         return False, 0.0, "", [], []
     try:
         data = base64.b64decode(audio_base64)
@@ -94,14 +97,7 @@ async def transcribe_and_match(audio_base64: str, expected: str = EXPECTED_OATH)
                 files = {"file": (os.path.basename(path), fh, "audio/m4a")}
                 resp = await client.post(url, headers=headers, files=files, data={"model": "whisper-1", "language": "en"})
         if resp.status_code != 200:
-            # Fallback to direct OpenAI endpoint
-            url2 = "https://api.openai.com/v1/audio/transcriptions"
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                with open(path, "rb") as fh:
-                    files = {"file": (os.path.basename(path), fh, "audio/m4a")}
-                    resp = await client.post(url2, headers=headers, files=files, data={"model": "whisper-1", "language": "en"})
-            if resp.status_code != 200:
-                return False, 0.0, f"[transcription error {resp.status_code}: {resp.text[:200]}]", [], []
+            return False, 0.0, f"[transcription error {resp.status_code}]", [], []
         body = resp.json()
         transcript = (body.get("text") or "").strip()
         m = match_words(expected, transcript)

@@ -133,7 +133,10 @@ export default function VoiceListener({
     // 4) Web Speech API for real-time transcript + word highlighting
     // @ts-ignore
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SR) {
+    if (!SR) {
+      setErr('Live word-highlighting is not supported in this browser. Please use Chrome, Edge or Safari — or ask the sender to disable voice oath.');
+      // Continue anyway with just audio recording so user can still submit
+    } else {
       const r = new SR();
       r.lang = 'en-US';
       r.interimResults = true;
@@ -159,8 +162,8 @@ export default function VoiceListener({
         }
       };
       r.onerror = (e: any) => {
-        if (e?.error === 'no-speech') return;
-        setErr('Speech error: ' + e?.error);
+        if (e?.error === 'no-speech' || e?.error === 'aborted') return;
+        setErr('Speech recognition: ' + e?.error);
       };
       try { r.start(); recogRef.current = r; } catch {}
     }

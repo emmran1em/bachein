@@ -77,6 +77,27 @@ export const api = {
   chatSession: (id: string) => request(`/ai/chat/${id}`),
   chatAction: (body: { session_id: string; action: string; payload: any }) =>
     request('/ai/chat/action', { method: 'POST', body: JSON.stringify(body) }),
+
+  // ─── AI Workspace (Phase 1) ───
+  aiwProviders: () => request('/aiw/providers'),
+  aiwSettings: () => request('/aiw/settings'),
+  aiwPatchSettings: (body: { default_provider?: string; tier?: string }) =>
+    request('/aiw/settings', { method: 'PATCH', body: JSON.stringify(body) }),
+  aiwSaveKey: (provider: string, api_key: string) =>
+    request('/aiw/keys', { method: 'POST', body: JSON.stringify({ provider, api_key }) }),
+  aiwDeleteKey: (provider: string) => request(`/aiw/keys/${provider}`, { method: 'DELETE' }),
+  aiwTestKey: (provider: string) => request(`/aiw/keys/${provider}/test`, { method: 'POST' }),
+  aiwQuota: () => request('/aiw/quota'),
+  aiwConversations: () => request('/aiw/conversations'),
+  aiwCreateConversation: (body: { title?: string; provider?: string }) =>
+    request('/aiw/conversations', { method: 'POST', body: JSON.stringify(body) }),
+  aiwConversation: (id: string) => request(`/aiw/conversations/${id}`),
+  aiwPatchConversation: (id: string, body: { title?: string; pinned?: boolean }) =>
+    request(`/aiw/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  aiwDeleteConversation: (id: string) =>
+    request(`/aiw/conversations/${id}`, { method: 'DELETE' }),
+  aiwChat: (body: { conversation_id?: string; message: string; provider?: string; quick_action?: string; attachments?: any[] }) =>
+    request('/aiw/chat', { method: 'POST', body: JSON.stringify(body) }),
   createDocument: (body: any) =>
     request('/documents', { method: 'POST', body: JSON.stringify(body) }),
   listSent: () => request('/documents/sent'),
