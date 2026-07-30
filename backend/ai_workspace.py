@@ -128,8 +128,9 @@ class ChatSendIn(BaseModel):
 
 
 # ============== Router factory ==============
-def build_ai_router(db, get_current_user):
+def build_ai_router(db, get_current_user, get_user_flex=None):
     router = APIRouter(prefix="/aiw")
+    user_dep_flex = get_user_flex or get_current_user
 
     async def _get_user_settings(user_id: str) -> Dict[str, Any]:
         s = await db.ai_settings.find_one({"user_id": user_id}, {"_id": 0})
@@ -187,7 +188,18 @@ def build_ai_router(db, get_current_user):
                 return {"source": "emergent", "key": em, "model": p["default_model"], "provider": provider_id}
         raise HTTPException(402, f"No API key available for {p['name']}. Add your own key under Settings → BYO.")
 
-    async def _call_llm(auth: Dict[str, str], system: str, prompt: str, session_id: str) -> str:
+    async def _register_download(user_id: str, name: str, kind: str, pdf_bytes: bytes, ref_id: str = "") -> str:
+        """Persist a generated PDF into the user's Downloads section."""
+        import base64 as _b64
+        rec = {
+            "id": str(uuid.uuid4()), "user_id": user_id, "name": name, "kind": kind,
+            "ref_id": ref_id, "size": len(pdf_bytes),
+            "pdf_b64": _b64.b64encode(pdf_bytes).decode(), "created_at": _now_iso(),
+        }
+        await db.downloads.insert_one(dict(rec))
+        return rec["id"]
+
+    async def _call_llm(auth: Dict[str, str], system: str, prompt: str, session_id: str, image_b64: Optional[str] = None) -> str:
         """Provider dispatch. MVP: Emergent adapter for gemini/openai/anthropic; BYO via direct SDK later."""
         provider = auth["provider"]
         key = auth["key"]
@@ -198,11 +210,15 @@ def build_ai_router(db, get_current_user):
         # we route through emergentintegrations. Later, when the user swaps to their own keys,
         # this branch becomes direct SDK calls per provider.
         if src in ("emergent", "bachein") and PROVIDERS[provider].get("emergent_channel"):
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
             channel = PROVIDERS[provider]["emergent_channel"]
             chat = LlmChat(api_key=key, session_id=session_id, system_message=system).with_model(channel, model)
-            reply = await chat.send_message(UserMessage(text=prompt))
+            msg = UserMessage(text=prompt, file_contents=[ImageContent(image_base64=image_b64)]) if image_b64 else UserMessage(text=prompt)
+            reply = await chat.send_message(msg)
             return reply or ""
+
+        if image_b64 and provider not in ("openai", "gemini"):
+            raise HTTPException(400, f"{PROVIDERS[provider]['name']} key does not support image input here. Upload a text-based PDF or paste the text instead.")
 
         # BYO — direct provider SDKs
         if provider == "openai":
@@ -213,7 +229,12 @@ def build_ai_router(db, get_current_user):
                     headers={"Authorization": f"Bearer {key}"},
                     json={
                         "model": model,
-                        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                        "messages": [{"role": "system", "content": system}, {"role": "user", "content": (
+                            prompt if not image_b64 else [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                            ]
+                        )}],
                     },
                 )
                 if r.status_code != 200: raise HTTPException(r.status_code, f"OpenAI: {r.text[:300]}")
@@ -234,7 +255,7 @@ def build_ai_router(db, get_current_user):
                 r = await client.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
                     json={"systemInstruction": {"parts": [{"text": system}]},
-                          "contents": [{"parts": [{"text": prompt}]}]},
+                          "contents": [{"parts": ([{"text": prompt}] + ([{"inline_data": {"mime_type": "image/jpeg", "data": image_b64}}] if image_b64 else []))}]},
                 )
                 if r.status_code != 200: raise HTTPException(r.status_code, f"Gemini: {r.text[:300]}")
                 cands = r.json().get("candidates", [{}])
@@ -664,6 +685,13 @@ def build_ai_router(db, get_current_user):
         }
         await db.question_papers.insert_one(dict(record))
 
+        # Auto-save rendered PDF to Downloads section
+        try:
+            pdf_bytes = _render_paper_pdf(parsed or {}, record["params"])
+            await _register_download(user["id"], f"{body.board} Class {body.class_level} {body.subject} — Question Paper", "question_paper", pdf_bytes, paper_id)
+        except Exception:
+            pass
+
         return {
             "id": paper_id,
             "paper": parsed,
@@ -686,7 +714,7 @@ def build_ai_router(db, get_current_user):
         return p
 
     @router.get("/question-papers/{qp_id}/pdf")
-    async def question_paper_pdf(qp_id: str, user=Depends(get_current_user)):
+    async def question_paper_pdf(qp_id: str, user=Depends(user_dep_flex)):
         from fastapi.responses import Response
         p = await db.question_papers.find_one({"id": qp_id, "user_id": user["id"]}, {"_id": 0})
         if not p: raise HTTPException(404, "Not found")
@@ -694,6 +722,156 @@ def build_ai_router(db, get_current_user):
         pdf_bytes = _render_paper_pdf(p.get("paper") or {}, p.get("params", {}))
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"inline; filename=question-paper-{qp_id}.pdf"})
+
+    # ============== Phase 5 — Question Paper Analysis (Topper-Style Answers) ==============
+    class AnswerPaperIn(BaseModel):
+        text: Optional[str] = None
+        file_base64: Optional[str] = None
+        filename: Optional[str] = None
+        subject: Optional[str] = ""
+        class_level: Optional[str] = ""
+        board: Optional[str] = ""
+        detail: str = "standard"      # concise | standard | detailed
+        language: str = "English"
+        provider: Optional[str] = None
+
+    @router.post("/answer-paper")
+    async def create_answer_paper(body: AnswerPaperIn, user=Depends(get_current_user)):
+        settings = await _get_user_settings(user["id"])
+        pid = body.provider or settings.get("default_provider", "gemini")
+        auth = await _pick_key(user, pid)
+        if auth["source"] != "byo":
+            limits = _limits(settings.get("tier", "free"))
+            used = await _quota_used(user["id"])
+            if used["daily"] >= limits["daily"] or used["monthly"] >= limits["monthly"]:
+                raise HTTPException(402, "AI quota reached. Connect your own key.")
+
+        # ── Extract question paper text (or image for vision) ──
+        import base64 as _b64
+        source_text = (body.text or "").strip()
+        image_b64: Optional[str] = None
+        if body.file_base64 and body.filename:
+            fn = body.filename.lower()
+            try:
+                raw = _b64.b64decode(body.file_base64)
+            except Exception:
+                raise HTTPException(400, "Could not read the uploaded file.")
+            if fn.endswith(".pdf"):
+                try:
+                    import fitz
+                    pdf = fitz.open(stream=raw, filetype="pdf")
+                    source_text = "\n".join(p.get_text() for p in pdf)
+                    if len(source_text.strip()) < 40 and len(pdf) > 0:
+                        # Scanned PDF — render first page as image for vision models
+                        pix = pdf[0].get_pixmap(dpi=130)
+                        image_b64 = _b64.b64encode(pix.tobytes("jpeg")).decode()
+                        source_text = ""
+                except Exception as e:
+                    raise HTTPException(400, f"Could not parse PDF: {e}")
+            elif fn.endswith((".txt", ".md")):
+                source_text = raw.decode(errors="ignore")
+            elif fn.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                image_b64 = body.file_base64
+            else:
+                raise HTTPException(400, "Unsupported file. Upload a PDF, image, or text file.")
+        if not source_text and not image_b64:
+            raise HTTPException(400, "Provide a question paper — upload a file or paste the text.")
+
+        detail_map = {
+            "concise": "Keep each answer crisp — exactly enough to score full marks, no extra fluff.",
+            "standard": "Write complete, well-structured answers the way a school topper writes in a board exam.",
+            "detailed": "Write elaborate topper-level answers with all working steps, labelled points, and extra detail examiners love.",
+        }
+        system = (
+            "You are the school topper and a board-exam examiner combined. "
+            "You write PERFECT answer booklets: step-wise solutions, exact marking-scheme alignment, "
+            "and presentation exactly like a topper's ruled answer sheet. "
+            "You MUST output strict JSON only — no prose outside the JSON."
+        )
+        meta = f"Board: {body.board or 'unknown'} · Class: {body.class_level or 'unknown'} · Subject: {body.subject or 'unknown'} · Language: {body.language}"
+        prompt = (
+            f"Below is a question paper. Answer EVERY question like a topper in a board-exam answer booklet.\n{meta}\n"
+            f"{detail_map.get(body.detail, detail_map['standard'])}\n\n"
+            + (f"QUESTION PAPER TEXT:\n---\n{source_text[:14000]}\n---\n\n" if source_text else "The question paper is provided as an attached image — read every question from it.\n\n")
+            + "Return ONLY this JSON schema (raw JSON, no markdown fences):\n"
+            "{\n"
+            '  "title": "string",\n'
+            '  "subject": "string",\n'
+            '  "total_marks": 0,\n'
+            '  "answers": [\n'
+            '    {"q_no":"1","question":"short restatement of the question","marks":3,\n'
+            '     "steps":[{"text":"working / point written on the answer sheet","marks":1}],\n'
+            '     "final_answer":"the boxed/concluding line",\n'
+            '     "examiner_tip":"1-line note on how marks are awarded"}\n'
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Answer in the order questions appear. For MCQs state the option AND one-line reason.\n"
+            "- Split marks across steps exactly per typical board marking schemes.\n"
+            "- For diagrams describe what the topper would draw in [Diagram: ...] form.\n"
+            "- Use the requested language for the answers."
+        )
+        try:
+            raw_reply = await _call_llm(auth, system, prompt, f"ap-{uuid.uuid4()}", image_b64=image_b64)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"AI error: {e}")
+        if auth["source"] != "byo":
+            await _consume_quota(user["id"])
+
+        import json as _json, re as _re
+        parsed = None
+        try: parsed = _json.loads(raw_reply)
+        except Exception:
+            m = _re.search(r"\{[\s\S]*\}", raw_reply)
+            if m:
+                try: parsed = _json.loads(m.group(0))
+                except Exception: parsed = None
+
+        ap_id = str(uuid.uuid4())
+        record = {
+            "id": ap_id, "user_id": user["id"],
+            "params": {"subject": body.subject, "class_level": body.class_level, "board": body.board,
+                       "detail": body.detail, "language": body.language, "filename": body.filename},
+            "raw_text": raw_reply, "answers": parsed, "created_at": _now_iso(),
+        }
+        await db.answer_papers.insert_one(dict(record))
+
+        # Auto-save the ruled booklet PDF to Downloads
+        try:
+            pdf_bytes = _render_booklet_pdf(parsed or {}, record["params"])
+            name = (parsed or {}).get("title") or f"{body.subject or 'Paper'} — Topper Answer Booklet"
+            await _register_download(user["id"], name, "answer_paper", pdf_bytes, ap_id)
+        except Exception:
+            pass
+
+        return {
+            "id": ap_id, "answers": parsed,
+            "raw_text": raw_reply if parsed is None else None,
+            "parsed": bool(parsed), "provider": pid, "source": auth["source"],
+            "disclaimer": "AI can make mistake, please check important info.",
+        }
+
+    @router.get("/answer-papers")
+    async def list_answer_papers(user=Depends(get_current_user)):
+        items = await db.answer_papers.find({"user_id": user["id"]}, {"_id": 0, "raw_text": 0, "answers": 0}).sort("created_at", -1).to_list(50)
+        return {"items": items}
+
+    @router.get("/answer-papers/{ap_id}")
+    async def get_answer_paper(ap_id: str, user=Depends(get_current_user)):
+        p = await db.answer_papers.find_one({"id": ap_id, "user_id": user["id"]}, {"_id": 0})
+        if not p: raise HTTPException(404, "Not found")
+        return p
+
+    @router.get("/answer-papers/{ap_id}/pdf")
+    async def answer_paper_pdf(ap_id: str, user=Depends(user_dep_flex)):
+        from fastapi.responses import Response
+        p = await db.answer_papers.find_one({"id": ap_id, "user_id": user["id"]}, {"_id": 0})
+        if not p: raise HTTPException(404, "Not found")
+        pdf_bytes = _render_booklet_pdf(p.get("answers") or {}, p.get("params", {}))
+        return Response(content=pdf_bytes, media_type="application/pdf",
+                        headers={"Content-Disposition": f"inline; filename=answer-booklet-{ap_id}.pdf"})
 
     return router
 
@@ -763,5 +941,112 @@ def _render_paper_pdf(paper: dict, params: dict) -> bytes:
             for j, sq in enumerate(sqs):
                 y = wrap(f"({chr(97+j)}) {sq if isinstance(sq, str) else sq.get('text', '')}", y, 9, indent=24)
             y -= 4
+    c.showPage(); c.save()
+    return buf.getvalue()
+
+
+def _render_booklet_pdf(data: dict, params: dict) -> bytes:
+    """Render topper-style answers on a ruled board-exam answer booklet (blue rules + red margin)."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    import io as _io, textwrap as _tw
+
+    buf = _io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    W, H = A4
+    left_edge = 1.1 * cm
+    margin_x = 2.9 * cm            # writing starts here (right of the red margin line)
+    red_x = margin_x - 0.45 * cm   # red vertical margin line
+    right = W - 1.4 * cm
+    top = H - 2.4 * cm
+    bottom = 1.8 * cm
+    gap = 21                       # rule spacing
+    state = {"y": top, "page": 0}
+
+    def draw_page():
+        state["page"] += 1
+        # ruled horizontal lines (light blue)
+        c.setStrokeColorRGB(0.72, 0.82, 0.94)
+        c.setLineWidth(0.7)
+        y = top
+        while y > bottom:
+            c.line(left_edge, y - 5, right, y - 5)
+            y -= gap
+        # red left margin line
+        c.setStrokeColorRGB(0.86, 0.32, 0.32)
+        c.setLineWidth(1.1)
+        c.line(red_x, H - 1.1 * cm, red_x, bottom - 0.6 * cm)
+        # page number
+        c.setFillColorRGB(0.45, 0.45, 0.5)
+        c.setFont("Helvetica", 8)
+        c.drawRightString(right, H - 1.3 * cm, f"Page {state['page']}")
+        c.setFillColorRGB(0.08, 0.08, 0.15)
+        state["y"] = top
+
+    def next_line():
+        state["y"] -= gap
+        if state["y"] < bottom:
+            c.showPage()
+            draw_page()
+
+    def write(text, size=10.5, bold=False, indent=0, margin_label=None, right_label=None, color=None):
+        wrap_width = max(30, int((right - margin_x - indent) / (size * 0.52)))
+        chunks = _tw.wrap(text, width=wrap_width) or [""]
+        for idx, chunk in enumerate(chunks):
+            if color: c.setFillColorRGB(*color)
+            else: c.setFillColorRGB(0.08, 0.08, 0.15)
+            c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+            c.drawString(margin_x + indent, state["y"], chunk)
+            if idx == 0 and margin_label:
+                c.setFont("Helvetica-Bold", 10.5)
+                c.setFillColorRGB(0.86, 0.32, 0.32)
+                c.drawString(left_edge + 4, state["y"], margin_label)
+                c.setFillColorRGB(0.08, 0.08, 0.15)
+            if idx == 0 and right_label:
+                c.setFont("Helvetica-Bold", 9)
+                c.setFillColorRGB(0.3, 0.45, 0.3)
+                c.drawRightString(right - 2, state["y"], right_label)
+                c.setFillColorRGB(0.08, 0.08, 0.15)
+            next_line()
+
+    draw_page()
+
+    # Booklet header (page 1)
+    title = data.get("title") or f"{params.get('subject') or 'Answer'} — Answer Booklet"
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString((left_edge + right) / 2, state["y"], title[:80])
+    next_line()
+    sub = " · ".join([x for x in [params.get("board"), f"Class {params.get('class_level')}" if params.get("class_level") else "", params.get("subject")] if x])
+    if sub:
+        c.setFont("Helvetica", 10)
+        c.setFillColorRGB(0.35, 0.35, 0.4)
+        c.drawCentredString((left_edge + right) / 2, state["y"], sub[:100])
+        c.setFillColorRGB(0.08, 0.08, 0.15)
+        next_line()
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColorRGB(0.86, 0.32, 0.32)
+    c.drawCentredString((left_edge + right) / 2, state["y"], "— TOPPER-STYLE ANSWER SHEET —")
+    c.setFillColorRGB(0.08, 0.08, 0.15)
+    next_line(); next_line()
+
+    for ans in (data.get("answers") or []):
+        qno = str(ans.get("q_no", ""))
+        marks = ans.get("marks", "")
+        # question restatement (grey, small)
+        write(ans.get("question", ""), size=9, indent=0, color=(0.42, 0.42, 0.48),
+              margin_label=f"Q{qno}.", right_label=f"[{marks}m]" if marks != "" else None)
+        for st in (ans.get("steps") or []):
+            txt = st.get("text", "") if isinstance(st, dict) else str(st)
+            m = st.get("marks") if isinstance(st, dict) else None
+            write(txt, size=10.5, indent=6, right_label=(f"+{m}" if m else None))
+        fa = ans.get("final_answer")
+        if fa:
+            write(f"∴  {fa}", size=10.5, bold=True, indent=6)
+        tip = ans.get("examiner_tip")
+        if tip:
+            write(f"Examiner: {tip}", size=8.5, indent=6, color=(0.5, 0.42, 0.25))
+        next_line()
+
     c.showPage(); c.save()
     return buf.getvalue()

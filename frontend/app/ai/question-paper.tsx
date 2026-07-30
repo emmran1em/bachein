@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch, ActivityIndicator, Linking, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
-import { api, getToken } from '@/src/api';
+import { api } from '@/src/api';
+import { sharePdf } from '@/src/share';
 import BacheinAiLogo from '@/src/components/BacheinAiLogo';
 import DotsLoader from '@/src/components/DotsLoader';
 
@@ -138,6 +139,10 @@ export default function QuestionPaperCreator() {
             <View style={s.resultHead}>
               <Text style={s.paperTitle}>{paper?.title || `${board} Class ${classLevel} — ${subject}`}</Text>
               <Text style={s.paperMeta}>Total: {totalMarks} marks · {duration} min · {language}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 }}>
+                <Ionicons name="checkmark-circle" size={14} color="#16a34a" />
+                <Text style={{ color: '#16a34a', fontSize: 12, fontWeight: '500' }}>Saved to your Downloads</Text>
+              </View>
             </View>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               <Pressable testID="qp-new" style={s.secondaryBtn} onPress={() => setResult(null)}>

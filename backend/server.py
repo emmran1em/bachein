@@ -892,6 +892,22 @@ async def verify_otp(req: VerifyOtpRequest, user=Depends(get_current_user)):
     )
     return {"verified": True}
 
+class FaceDetectRequest(BaseModel):
+    image_base64: str
+
+
+@api.post("/documents/face-detect")
+async def face_detect_live(req: FaceDetectRequest, user=Depends(get_current_user)):
+    """Lightweight live face-presence check used by the auto-capture camera overlay."""
+    if not req.image_base64 or len(req.image_base64) < 200:
+        return {"face": False}
+    try:
+        img = _decode_image(req.image_base64)
+        return {"face": bool(detect_face(img))}
+    except Exception:
+        return {"face": False}
+
+
 @api.post("/documents/face-verify")
 async def face_verify(req: FaceVerifyRequest, user=Depends(get_current_user)):
     doc = await db.documents.find_one({"id": req.document_id})
@@ -1340,9 +1356,14 @@ app.include_router(api)
 
 # Mount AI Workspace router (provider-agnostic)
 from ai_workspace import build_ai_router
-_ai_router = build_ai_router(db, get_current_user)
+_ai_router = build_ai_router(db, get_current_user, get_user_from_query_or_header)
 # Mount under the same /api prefix
 app.include_router(_ai_router, prefix="/api")
+
+# Downloads section (generated PDFs — share / rename / delete)
+from downloads_routes import build_downloads_router
+_dl_router = build_downloads_router(db, get_current_user, get_user_from_query_or_header)
+app.include_router(_dl_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,

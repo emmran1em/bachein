@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
 import { api } from '@/src/api';
@@ -31,6 +32,7 @@ const QUICK_ACTIONS = [
 ];
 
 export default function AiWorkspace() {
+  const router = useRouter();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [settings, setSettings] = useState<any>(null);
   const [convs, setConvs] = useState<Conv[]>([]);
@@ -269,6 +271,23 @@ export default function AiWorkspace() {
             <View style={s.welcome}>
               <BacheinAiLogo size={72} />
               <Text style={s.welcomeTitle}>What can I do for you?</Text>
+              <View style={s.toolsRow}>
+                <Pressable testID="tool-question-paper" style={s.toolCard} onPress={() => router.push('/ai/question-paper')}>
+                  <Ionicons name="school-outline" size={20} color={theme.colors.brand} />
+                  <Text style={s.toolTitle}>Question Paper</Text>
+                  <Text style={s.toolSub}>Create board-exam papers</Text>
+                </Pressable>
+                <Pressable testID="tool-answer-paper" style={s.toolCard} onPress={() => router.push('/ai/answer-paper')}>
+                  <Ionicons name="create-outline" size={20} color={theme.colors.brand} />
+                  <Text style={s.toolTitle}>Topper Answers</Text>
+                  <Text style={s.toolSub}>Solve any paper, booklet style</Text>
+                </Pressable>
+                <Pressable testID="tool-downloads" style={s.toolCard} onPress={() => router.push('/downloads')}>
+                  <Ionicons name="download-outline" size={20} color={theme.colors.brand} />
+                  <Text style={s.toolTitle}>Downloads</Text>
+                  <Text style={s.toolSub}>Your generated PDFs</Text>
+                </Pressable>
+              </View>
             </View>
           ) : (
             <View style={{ padding: 20 }}>
@@ -529,6 +548,10 @@ const s = StyleSheet.create({
   centerContent: { justifyContent: 'center', alignItems: 'center' },
   welcome: { alignItems: 'center', paddingHorizontal: 24 },
   welcomeTitle: { color: theme.colors.brand, fontSize: 28, fontWeight: '500', marginTop: 22, letterSpacing: -0.5, textAlign: 'center' },
+  toolsRow: { flexDirection: 'row', gap: 8, marginTop: 26, alignSelf: 'stretch' },
+  toolCard: { flex: 1, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: theme.colors.border, padding: 12, gap: 5 },
+  toolTitle: { color: theme.colors.brand, fontSize: 12.5, fontWeight: '600', marginTop: 4 },
+  toolSub: { color: theme.colors.muted, fontSize: 10, lineHeight: 14 },
   msgUser: { alignSelf: 'flex-end', maxWidth: '85%', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 20, borderBottomRightRadius: 6, marginTop: 12, backgroundColor: theme.colors.brand },
   msgUserText: { color: '#fff', fontSize: 14, lineHeight: 20 },
   msgAiWrap: { alignSelf: 'flex-start', maxWidth: '95%', marginTop: 14 },

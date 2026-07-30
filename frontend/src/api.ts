@@ -105,6 +105,20 @@ export const api = {
   aiwQuestionPapers: () => request('/aiw/question-papers'),
   aiwQuestionPaper1: (id: string) => request(`/aiw/question-papers/${id}`),
   aiwQuestionPaperPdfUrl: (id: string) => `${BASE}/api/aiw/question-papers/${id}/pdf`,
+  // ─── AI Workspace (Phase 5 — Topper Answers) ───
+  aiwAnswerPaper: (body: any) =>
+    request('/aiw/answer-paper', { method: 'POST', body: JSON.stringify(body) }),
+  aiwAnswerPapers: () => request('/aiw/answer-papers'),
+  aiwAnswerPaperPdfUrl: (id: string) => `${API}/aiw/answer-papers/${id}/pdf`,
+  // ─── Downloads (Phase 6) ───
+  downloads: () => request('/downloads'),
+  downloadsRename: (id: string, name: string) =>
+    request(`/downloads/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  downloadsDelete: (id: string) => request(`/downloads/${id}`, { method: 'DELETE' }),
+  downloadFileUrl: (id: string) => `${API}/downloads/${id}/file`,
+  // ─── Live face detection (auto-capture) ───
+  faceDetect: (image_base64: string) =>
+    request('/documents/face-detect', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
   createDocument: (body: any) =>
     request('/documents', { method: 'POST', body: JSON.stringify(body) }),
   listSent: () => request('/documents/sent'),

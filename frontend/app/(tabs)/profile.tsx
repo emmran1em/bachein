@@ -24,6 +24,11 @@ export default function Profile() {
 
         <Text style={ss.sectionLabel}>WORKSPACE</Text>
         <View style={ss.menu}>
+          <Pressable style={ss.row} testID="profile-downloads" onPress={() => router.push('/downloads')}>
+            <Ionicons name="download-outline" size={18} color={theme.colors.brand} />
+            <Text style={ss.rowText}>Downloads</Text>
+            <Ionicons name="chevron-forward" size={16} color={theme.colors.muted} style={{ marginLeft: 'auto' }} />
+          </Pressable>
           <Pressable style={ss.row} testID="profile-settings">
             <Ionicons name="settings-outline" size={18} color={theme.colors.brand} />
             <Text style={ss.rowText}>Settings</Text>
