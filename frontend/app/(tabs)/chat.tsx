@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, Animated, Easing, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
 import { api } from '@/src/api';
-import ThinkingLoader from '@/src/components/ThinkingLoader';
+import DotsLoader from '@/src/components/DotsLoader';
+import BacheinAiLogo from '@/src/components/BacheinAiLogo';
+import PlansSheet from '@/src/components/PlansSheet';
 
 type Msg = { id?: string; role: 'user' | 'assistant'; content: string; provider?: string; ts?: string; source?: string };
 type Provider = {
@@ -43,6 +45,7 @@ export default function AiWorkspace() {
   const [byoKey, setByoKey] = useState('');
   const [byoBusy, setByoBusy] = useState(false);
   const [byoError, setByoError] = useState('');
+  const [showPlans, setShowPlans] = useState(false);
   const [voiceOn, setVoiceOn] = useState(false);
   const [historyQuery, setHistoryQuery] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -232,112 +235,100 @@ export default function AiWorkspace() {
 
   return (
     <SafeAreaView style={s.container} edges={['top']} testID="ai-workspace">
-      {/* Header */}
+      {/* Header — clean, Manus-style */}
       <View style={s.header}>
         <Pressable testID="ai-history-btn" onPress={() => setShowHistory(true)} style={s.iconBtn}>
-          <Ionicons name="time-outline" size={20} color={theme.colors.brand} />
+          <Ionicons name="menu-outline" size={20} color={theme.colors.brand} />
         </Pressable>
-        <View style={{ flex: 1 }}>
-          <Text style={s.title}>Bachein AI</Text>
-          <Text style={s.subtitle}>{tier === 'byo' ? 'Your own keys' : tier === 'pro' ? 'Pro' : `Free · ${quota?.daily_used ?? 0}/${quota?.daily_limit ?? 20} today`}</Text>
-        </View>
-        <Pressable testID="ai-provider-btn" onPress={() => setShowProviderPicker(true)} style={s.providerChip}>
-          <View style={s.providerDot} />
-          <Text style={s.providerChipText}>{activeProvider?.name || 'Choose'}</Text>
-          <Ionicons name="chevron-down" size={12} color={theme.colors.brand} />
+        <View style={{ flex: 1 }} />
+        {/* Free plan | Upgrade chip */}
+        <Pressable testID="ai-plan-chip" onPress={() => setShowPlans(true)} style={s.planChip}>
+          <Text style={[s.planChipTextMuted, tier === 'free' && s.planChipTextActive]}>Free plan</Text>
+          <Text style={s.planChipDivider}>|</Text>
+          <Text style={s.planChipTextUpgrade}>Upgrade</Text>
         </Pressable>
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           ref={scrollRef}
-          contentContainerStyle={{ padding: 20, paddingBottom: 200 }}
+          contentContainerStyle={[{ paddingBottom: 200, flexGrow: 1 }, messages.length === 0 && s.centerContent]}
           keyboardShouldPersistTaps="handled"
         >
-          {messages.length === 0 && (
+          {messages.length === 0 ? (
             <View style={s.welcome}>
-              <View style={s.welcomeIcon}><Ionicons name="sparkles" size={26} color={theme.colors.brand} /></View>
-              <Text style={s.welcomeTitle}>How can I help today?</Text>
-              <Text style={s.welcomeSub}>Ask anything — draft NDAs, review documents, explain clauses, write code, or brainstorm ideas.</Text>
-
-              <View style={s.starterGrid}>
-                {[
-                  { t: 'Draft a mutual NDA between two startups', a: 'draft_nda' },
-                  { t: 'Summarize this contract in 5 bullets', a: 'summarize' },
-                  { t: 'Explain the indemnification clause', a: 'explain' },
-                  { t: 'Rewrite this to sound professional', a: 'rewrite' },
-                ].map((x, i) => (
-                  <Pressable key={i} style={s.starter} onPress={() => send({ quick_action: x.a, overrideText: x.t })}>
-                    <Text style={s.starterText}>{x.t}</Text>
-                    <Ionicons name="arrow-forward" size={14} color={theme.colors.brand} />
-                  </Pressable>
-                ))}
-              </View>
+              <BacheinAiLogo size={72} />
+              <Text style={s.welcomeTitle}>What can I do for you?</Text>
             </View>
-          )}
+          ) : (
+            <View style={{ padding: 20 }}>
+              {messages.map((m, i) => (
+                <View key={i} style={m.role === 'user' ? s.msgUser : s.msgAiWrap}>
+                  {m.role === 'assistant' && (
+                    <View style={s.aiHeaderRow}>
+                      <BacheinAiLogo size={22} />
+                      <Text style={s.aiName}>{providers.find((p) => p.id === m.provider)?.name || 'BacheIn AI'}</Text>
+                      {m.source === 'byo' && <View style={s.byoBadge}><Text style={s.byoBadgeText}>YOUR KEY</Text></View>}
+                    </View>
+                  )}
+                  {m.role === 'user' ? (
+                    <Text style={s.msgUserText} selectable>{m.content}</Text>
+                  ) : (
+                    <View style={s.msgAi}>
+                      <Text style={s.msgAiText} selectable>{m.content}</Text>
+                      <Text style={s.aiDisclaimer}>AI can make mistakes. Please double-check important info.</Text>
+                    </View>
+                  )}
+                </View>
+              ))}
 
-          {messages.map((m, i) => (
-            <View key={i} style={m.role === 'user' ? s.msgUser : s.msgAi}>
-              {m.role === 'assistant' && (
-                <View style={s.aiHeader}>
-                  <View style={s.aiDot} />
-                  <Text style={s.aiName}>{providers.find((p) => p.id === m.provider)?.name || 'AI'}</Text>
-                  {m.source === 'byo' && <View style={s.byoBadge}><Text style={s.byoBadgeText}>YOUR KEY</Text></View>}
+              {sending && (
+                <View style={s.msgAiWrap}>
+                  <View style={s.aiHeaderRow}>
+                    <BacheinAiLogo size={22} />
+                    <Text style={s.aiName}>{activeProvider?.name || 'BacheIn AI'}</Text>
+                  </View>
+                  <View style={[s.msgAi, { paddingVertical: 18 }]}>
+                    <DotsLoader />
+                  </View>
                 </View>
               )}
-              <Text style={m.role === 'user' ? s.msgUserText : s.msgAiText} selectable>{m.content}</Text>
-              {m.role === 'assistant' && (
-                <Text style={s.aiDisclaimer}>AI can make mistakes. Please double-check important information.</Text>
-              )}
-            </View>
-          ))}
-
-          {sending && (
-            <View style={s.msgAi}>
-              <View style={s.aiHeader}>
-                <View style={s.aiDot} />
-                <Text style={s.aiName}>{activeProvider?.name || 'AI'}</Text>
-              </View>
-              <ThinkingLoader mode={thinkingMode} />
             </View>
           )}
         </ScrollView>
 
-        {/* Quick actions */}
-        <View style={s.qaBar}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 14 }}>
-            {QUICK_ACTIONS.map((qa) => (
-              <Pressable key={qa.id} testID={`qa-${qa.id}`} style={s.qaChip} onPress={() => {
-                if (input.trim()) send({ quick_action: qa.id });
-                else setInput(`${qa.label}: `);
-              }}>
-                <Ionicons name={qa.icon} size={13} color={theme.colors.brand} />
-                <Text style={s.qaText}>{qa.label}</Text>
+        {/* Composer — Manus-style: single rounded card with inline model selector + mic + send */}
+        <View style={s.composerWrap}>
+          <View style={s.composerCard}>
+            <TextInput
+              testID="ai-input"
+              style={s.input}
+              value={input}
+              onChangeText={setInput}
+              placeholder={voiceOn ? 'Listening…' : 'Ask BacheIn anything'}
+              placeholderTextColor={theme.colors.muted}
+              multiline
+            />
+            <View style={s.composerRow}>
+              <Pressable testID="ai-provider-btn" onPress={() => setShowProviderPicker(true)} style={s.modelChipInline}>
+                <View style={s.modelDot} />
+                <Text style={s.modelChipText}>{activeProvider?.name || 'Model'}</Text>
+                <Ionicons name="chevron-down" size={11} color={theme.colors.brand} />
               </Pressable>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* Composer */}
-        <View style={s.composer}>
-          <Pressable testID="ai-mic-btn" onPress={voiceOn ? stopVoice : startVoice} style={[s.micBtn, voiceOn && s.micBtnOn]}>
-            <Ionicons name={voiceOn ? 'stop' : 'mic-outline'} size={18} color={voiceOn ? '#fff' : theme.colors.brand} />
-          </Pressable>
-          <TextInput
-            testID="ai-input"
-            style={s.input}
-            value={input}
-            onChangeText={setInput}
-            placeholder={voiceOn ? 'Listening…' : `Message ${activeProvider?.name || 'AI'}…`}
-            placeholderTextColor={theme.colors.muted}
-            multiline
-            onSubmitEditing={() => send()}
-          />
-          <Pressable testID="ai-send-btn" style={[s.sendBtn, !canSend && { opacity: 0.4 }]} disabled={!canSend} onPress={() => send()}>
-            <Ionicons name={sending ? 'ellipse' : 'arrow-up'} size={18} color={theme.colors.onBrandPrimary} />
-          </Pressable>
+              <View style={{ flex: 1 }} />
+              <Pressable testID="ai-mic-btn" onPress={voiceOn ? stopVoice : startVoice} style={[s.micBtn, voiceOn && s.micBtnOn]}>
+                <Ionicons name={voiceOn ? 'stop' : 'mic-outline'} size={16} color={voiceOn ? '#fff' : theme.colors.brand} />
+              </Pressable>
+              <Pressable testID="ai-send-btn" style={[s.sendBtn, !canSend && s.sendBtnDisabled]} disabled={!canSend} onPress={() => send()}>
+                <Ionicons name="arrow-up" size={16} color={canSend ? '#fff' : theme.colors.muted} />
+              </Pressable>
+            </View>
+          </View>
         </View>
       </KeyboardAvoidingView>
+
+      {/* ============== Plans modal ============== */}
+      <PlansSheet visible={showPlans} onClose={() => setShowPlans(false)} currentTier={tier as any} />
 
       {/* ============== Provider picker modal ============== */}
       <Modal visible={showProviderPicker} transparent animationType="slide" onRequestClose={() => setShowProviderPicker(false)}>
@@ -513,36 +504,35 @@ export default function AiWorkspace() {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.surface },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
   iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 18, color: theme.colors.brand, fontWeight: '500', letterSpacing: -0.3 },
-  subtitle: { color: theme.colors.muted, fontSize: 11 },
-  providerChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border },
-  providerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.success },
-  providerChipText: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
-  welcome: { alignItems: 'center', marginTop: 30 },
-  welcomeIcon: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border },
-  welcomeTitle: { color: theme.colors.brand, fontSize: 24, fontWeight: '500', marginTop: 16, letterSpacing: -0.5 },
-  welcomeSub: { color: theme.colors.muted, fontSize: 13, marginTop: 8, textAlign: 'center', lineHeight: 18, paddingHorizontal: 20 },
-  starterGrid: { marginTop: 26, gap: 10, alignSelf: 'stretch' },
-  starter: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border },
-  starterText: { flex: 1, color: theme.colors.brand, fontSize: 13, lineHeight: 18 },
-  msgUser: { backgroundColor: theme.colors.brand, alignSelf: 'flex-end', maxWidth: '85%', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderBottomRightRadius: 4, marginTop: 12 },
-  msgAi: { backgroundColor: '#fff', alignSelf: 'flex-start', maxWidth: '92%', paddingHorizontal: 14, paddingVertical: 12, borderRadius: 18, borderBottomLeftRadius: 4, marginTop: 12, borderWidth: 1, borderColor: theme.colors.border },
-  msgUserText: { color: theme.colors.onBrandPrimary, fontSize: 14, lineHeight: 20 },
+  planChip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border },
+  planChipTextMuted: { color: theme.colors.muted, fontSize: 12, fontWeight: '500' },
+  planChipTextActive: { color: theme.colors.brand },
+  planChipTextUpgrade: { color: theme.colors.accent, fontSize: 12, fontWeight: '600' },
+  planChipDivider: { color: theme.colors.borderStrong, fontSize: 12 },
+  centerContent: { justifyContent: 'center', alignItems: 'center' },
+  welcome: { alignItems: 'center', paddingHorizontal: 24 },
+  welcomeTitle: { color: theme.colors.brand, fontSize: 28, fontWeight: '500', marginTop: 22, letterSpacing: -0.5, textAlign: 'center' },
+  msgUser: { alignSelf: 'flex-end', maxWidth: '85%', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 20, borderBottomRightRadius: 6, marginTop: 12, backgroundColor: theme.colors.brand },
+  msgUserText: { color: '#fff', fontSize: 14, lineHeight: 20 },
+  msgAiWrap: { alignSelf: 'flex-start', maxWidth: '95%', marginTop: 14 },
+  msgAi: { backgroundColor: theme.colors.card, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 18, borderTopLeftRadius: 6, borderWidth: 1, borderColor: theme.colors.border, marginTop: 4 },
   msgAiText: { color: theme.colors.brand, fontSize: 14, lineHeight: 20 },
-  aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-  aiDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.accent },
+  aiHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   aiName: { color: theme.colors.muted, fontSize: 11, letterSpacing: 0.5, fontWeight: '500' },
   aiDisclaimer: { color: theme.colors.muted, fontSize: 10, marginTop: 8, fontStyle: 'italic' },
-  qaBar: { paddingVertical: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider },
-  qaChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, marginRight: 8 },
-  qaText: { color: theme.colors.brand, fontSize: 12, fontWeight: '500' },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 12, paddingBottom: 20, backgroundColor: theme.colors.surface },
-  micBtn: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  composerWrap: { padding: 12, paddingBottom: 20, backgroundColor: theme.colors.surface },
+  composerCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: theme.colors.border, borderRadius: 24, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10 },
+  input: { minHeight: 30, maxHeight: 140, color: theme.colors.brand, fontSize: 14, paddingVertical: 4 },
+  composerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  modelChipInline: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+  modelDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: theme.colors.accent },
+  modelChipText: { color: theme.colors.brand, fontSize: 11, fontWeight: '500' },
+  micBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   micBtnOn: { backgroundColor: theme.colors.error, borderColor: theme.colors.error },
-  input: { flex: 1, minHeight: 44, maxHeight: 120, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 22, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#fff', color: theme.colors.brand, fontSize: 14 },
-  sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center' },
+  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center' },
+  sendBtnDisabled: { backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border },
   // Modal
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },

@@ -1,0 +1,38 @@
+{
+  "summary": "Verified all fixes in the review request. Backend: 4/4 pytest cases pass — GET /api/aiw/providers returns exactly the 4 required providers (gemini, openai, anthropic, grok) with no DeepSeek/Perplexity/Mistral leaks; GET /api/documents/voice-oath-azure-token returns non-empty token + region (centralindia); POST /api/documents/voice-oath transcribes a real espeak-ng→opus/webm audio blob through Azure Speech and returns transcript='I acknowledge this information is confidential and agree not to disclose it.' with 100% word match (>=70% threshold); after 5 failed voice-oath attempts the 6th call correctly returns HTTP 423. Frontend (web preview, 390x844 mobile viewport, logged in as alice@bachein.com): AI workspace redesign is on-spec — hamburger menu top-left (ai-history-btn), 'Free plan | Upgrade' chip top-right (ai-plan-chip), centered b\\ SVG logo, 'What can I do for you?' title, NO starter prompt chips, NO '0/20 today' quota text; composer shows input + Gemini model chip (ai-provider-btn) + mic (ai-mic-btn) + send (ai-send-btn). Plans modal opens from the chip with Free/Pro/Advanced cards, CURRENT badge on Free, ₹499/month on Pro with Upgrade CTA, Advanced card, and × closes. Provider sheet shows exactly Gemini/ChatGPT/Claude/Grok with FREE / BYO ONLY badges and '+ Connect your own key' link on each. Chat send actually round-trips: user bubble 'Hello in 5 words' → dots-loader → Gemini reply 'Hello! How may I help?' with disclaimer. Mic tap does not crash — workspace stays mounted (in the headless browser it silently no-ops because Web Speech API is not exposed, which the spec accepts). History drawer opens with a search bar and TODAY group showing prior conversations, plus pin/rename/delete icons. Home tab hamburger reveals a drawer with 'Plans & Upgrade' (testID drawer-plans) that navigates to /plans and renders the PlansSheet correctly. Voice-oath native flow reviewed — code path is sound (records via useAudioRecorder → reads as base64 → posts to /api/documents/voice-oath which converts via ffmpeg→Azure Speech). No blocking bugs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_ai_voice.py",
+    "/app/test_reports/pytest/iter6_results.xml"
+  ],
+  "action_items": [
+    "No fixes needed — all review-request items pass. Ship it.",
+    "Nit (non-blocking): PlansSheet's Pro 'Upgrade' CTA (plans-cta-pro) currently has no onPress handler wired — tapping doesn't do anything. If real billing is planned, wire it to a checkout / contact flow.",
+    "Nit (non-blocking): chat.tsx line 186 uses global `alert()` which works on web but is not RN-safe. Consider `Alert.alert(...)` from react-native for future native builds."
+  ],
+  "critical_code_review_comments": [
+    "voice_match.py correctly prefers Azure Speech (short-audio REST API, 16kHz mono WAV via ffmpeg), then falls back to OpenAI Whisper only if a real sk- key is set. Clean tiered approach.",
+    "ai_workspace.py provider registry now contains only 4 providers (gemini/openai/anthropic/grok); the leftover BYO branches for deepseek/perplexity/mistral in _call_llm are dead code that could be pruned but are not reachable via /providers or /keys and so are not harmful.",
+    "chat.tsx has 579 lines — approaching the 700-line guideline; consider splitting the History and Provider modals into their own components for maintainability.",
+    "VoiceListener.native.tsx swallows all read/record errors and just sends an empty base64 with matchedWords=[]. When the backend receives an empty audio_base64 it returns transcript='' and matched=[], meaning the user sees a generic 'oath didn't match' with no diagnostic. Consider surfacing recorder failure to the caller in receive/[id].tsx.",
+    "server.py voice-oath endpoint correctly increments voice_attempts before returning and short-circuits with 423 at attempts>=5 (verified in pytest test_voice_oath_locks_after_5_failures)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter6_ai_voice.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (4/4 pytest)",
+    "frontend": "100% (7/7 UI flows: workspace, plans modal, provider picker, chat send, mic, history, drawer→/plans)"
+  },
+  "seed_data_creation": "Created two TEST_-prefixed NDA docs from alice@bachein.com to bob@bachein.com (TEST_iter6_voice_oath_doc, TEST_iter6_lock_doc). Installed ffmpeg + espeak-ng inside the test container so real oath audio can be generated for regression runs.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reuse /app/backend/tests/test_iter6_ai_voice.py for regression. Requires ffmpeg + espeak-ng installed in the runner (apt-get install -y ffmpeg espeak-ng). NDA doc creation now requires BOTH 'category' (e.g. 'NDA') AND 'mode' (e.g. 'secure') in the POST /api/documents body — previous test file missed 'mode' and returned 422. All AI provider frontend testIDs work: ai-workspace, ai-history-btn, ai-plan-chip, ai-input, ai-provider-btn, ai-mic-btn, ai-send-btn, plans-close, plans-cta-pro/free/byo, history-search, drawer-plans (on Home), menu-btn (Home hamburger, NOT 'drawer-menu'). Azure Speech transcription is confirmed working — a fresh espeak-ng WAV converted to opus/webm gives 100% word match. Mic on the AI composer intentionally no-ops on non-supported browsers; that is acceptable behavior per the spec.",
+  "rca_of_issue": "N/A — all reported bugs are already fixed by the E1 changes. Verified end-to-end."
+}

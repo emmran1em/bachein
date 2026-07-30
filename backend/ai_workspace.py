@@ -25,8 +25,8 @@ from cryptography.fernet import Fernet, InvalidToken
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "gemini": {
         "id": "gemini",
-        "name": "Google Gemini",
-        "tagline": "Multimodal · fast · long context",
+        "name": "Gemini",
+        "tagline": "Fast · multimodal · long context",
         "models": ["gemini-2.5-flash", "gemini-2.5-pro"],
         "default_model": "gemini-2.5-flash",
         "byo_key_url": "https://aistudio.google.com/apikey",
@@ -36,8 +36,8 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     },
     "openai": {
         "id": "openai",
-        "name": "OpenAI ChatGPT",
-        "tagline": "GPT-5 series · images · voice",
+        "name": "ChatGPT",
+        "tagline": "GPT · images · voice",
         "models": ["gpt-4o", "gpt-4o-mini"],
         "default_model": "gpt-4o-mini",
         "byo_key_url": "https://platform.openai.com/api-keys",
@@ -47,8 +47,8 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     },
     "anthropic": {
         "id": "anthropic",
-        "name": "Anthropic Claude",
-        "tagline": "Deep reasoning · long documents · code",
+        "name": "Claude",
+        "tagline": "Deep reasoning · long docs · code",
         "models": ["claude-sonnet-4-5-20250929", "claude-opus-4-5-20250929"],
         "default_model": "claude-sonnet-4-5-20250929",
         "byo_key_url": "https://console.anthropic.com/settings/keys",
@@ -58,47 +58,14 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     },
     "grok": {
         "id": "grok",
-        "name": "xAI Grok",
+        "name": "Grok",
         "tagline": "Real-time · witty · web-aware",
         "models": ["grok-4", "grok-beta"],
         "default_model": "grok-4",
         "byo_key_url": "https://console.x.ai",
         "supports_images": False,
         "supports_web": True,
-        "emergent_channel": None,  # BYO only for now
-    },
-    "deepseek": {
-        "id": "deepseek",
-        "name": "DeepSeek",
-        "tagline": "Efficient · code-first",
-        "models": ["deepseek-chat", "deepseek-coder"],
-        "default_model": "deepseek-chat",
-        "byo_key_url": "https://platform.deepseek.com/api_keys",
-        "supports_images": False,
-        "supports_web": False,
-        "emergent_channel": None,
-    },
-    "perplexity": {
-        "id": "perplexity",
-        "name": "Perplexity",
-        "tagline": "Live web search · citations",
-        "models": ["sonar-pro", "sonar"],
-        "default_model": "sonar-pro",
-        "byo_key_url": "https://www.perplexity.ai/settings/api",
-        "supports_images": False,
-        "supports_web": True,
-        "emergent_channel": None,
-    },
-    "mistral": {
-        "id": "mistral",
-        "name": "Mistral",
-        "tagline": "Fast · European · efficient",
-        "models": ["mistral-large-latest", "mistral-small-latest"],
-        "default_model": "mistral-large-latest",
-        "byo_key_url": "https://console.mistral.ai/api-keys",
-        "supports_images": False,
-        "supports_web": False,
-        "emergent_channel": None,
+        "emergent_channel": None,  # BYO only
     },
 }
 

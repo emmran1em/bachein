@@ -235,6 +235,7 @@ export default function Home() {
             <DrawerItem icon="construct-outline" label="File Kit" onPress={() => goTo('/(tabs)/filekit')} testID="drawer-tools" />
             <DrawerItem icon="lock-closed-outline" label="Vault" onPress={() => goTo('/(tabs)/vault')} testID="drawer-vault" />
             <DrawerItem icon="logo-github" label="GitHub Workspace" onPress={() => goTo('/github')} testID="drawer-github" />
+            <DrawerItem icon="ribbon-outline" label="Plans & Upgrade" onPress={() => goTo('/plans')} testID="drawer-plans" />
             <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
             <DrawerItem icon="person-outline" label="Profile" onPress={() => goTo('/(tabs)/profile')} testID="drawer-profile" />
             <DrawerItem icon="log-out-outline" label="Log out" onPress={logout} testID="drawer-logout" danger />
