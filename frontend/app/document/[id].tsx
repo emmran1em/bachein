@@ -184,7 +184,12 @@ export default function DocumentView() {
 
         <Text style={ss.sectionLabel}>DOCUMENT</Text>
         <View style={ss.docBox}>
-          <Text style={ss.docBody}>{doc.content}</Text>
+          <Pressable
+            onLongPress={() => { setAskText(doc.content || ''); setAskOpen(true); }}
+            delayLongPress={400}
+          >
+            <Text style={ss.docBody} selectable>{doc.content}</Text>
+          </Pressable>
 
           {(senderSig || receiverSig || doc.mode === 'secure') && (
             <View style={ss.sigBlock}>

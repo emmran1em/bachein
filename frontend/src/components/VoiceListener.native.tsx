@@ -45,10 +45,15 @@ export default function VoiceListener({
     setErr('');
     onLiveWords?.(oathWords.map(() => false), '');
     try {
+      // Request permission explicitly
+      const perm = await AudioModule.requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        setErr('Microphone permission denied. Please enable it in Settings → Bachein → Microphone.');
+        return;
+      }
       await recorder.prepareToRecordAsync();
       recorder.record();
       setListening(true);
-      // Animated pulse (native has no free real-time transcript so fake level via time-based sine)
       let t0 = Date.now();
       tickerRef.current = setInterval(() => {
         const dt = (Date.now() - t0) / 1000;
@@ -56,7 +61,7 @@ export default function VoiceListener({
         setLevel(lvl);
       }, 90);
     } catch (e: any) {
-      setErr('Microphone permission required: ' + (e.message || e));
+      setErr('Cannot start recording: ' + (e.message || e));
     }
   };
 

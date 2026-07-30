@@ -1,0 +1,37 @@
+{
+  "summary": "Verified all Phase 3+ fixes for BacheIn AI. Backend: 4/4 pytest passing (test_iter6_ai_voice.py) — GET /api/aiw/providers returns exactly {anthropic, gemini, grok, openai} (no DeepSeek/Perplexity/Mistral leak); GET /api/documents/voice-oath-azure-token returns non-empty token+region; POST /api/documents/voice-oath transcribes an espeak-ng→opus/webm audio blob through Azure Speech and matches oath words at 100%; 6th failed attempt correctly returns HTTP 423. Frontend (web preview, 390x844 mobile viewport, logged in as alice@bachein.com): (1) AI message rendering is fully embedded plain text — msgAi style has paddingHorizontal:0, no background color, no shadow (verified in chat.tsx:535); response 'Hello there!' rendered inline directly on the surface with a single 'BacheIn' label above it and exactly one 'AI can make mistake, please check important info.' disclaimer at the bottom. Content count checks: 1 disclaimer, 1 '>BacheIn<' label, and 'Gemini' string appears only in the composer model chip (not in the message header). (2) b\\ logo — Verified 3 <img> tags each with src pointing to '/assets/?unstable_path=.%2Fassets%2Fimages/ai_logo.jpg' visible on the AI workspace + response header + AI tab bar icon (via BacheinAiLogo which loads assets/images/ai_logo.jpg through Image + require). PlansSheet.tsx line 69 also uses BacheinAiLogo. File exists at /app/frontend/assets/images/ai_logo.jpg (26,071 bytes). (3) ai-attach-btn testID present in composer, tapping does not crash the workspace (DocumentPicker.getDocumentAsync fires — headless browser cannot complete the OS picker but composer stays mounted). (4) Signature drawing — Opened /create/secure → drafted with AI → walked through attach/security → opened 'Sign as Disclosing Party' bottom sheet → drew 3 separate strokes via mouse.down/move/up. All 3 strokes persisted: querySelectorAll('svg path').length === 3, and screenshot shows 3 distinct visible lines on the pad. PanResponder migration in SignatureBottomSheet.tsx:78-105 works correctly — no erasure on stroke start. (5) Ask BacheIn long-press — Opened TEST_iter6_lock_doc, long-pressed on the doc body ('Lock test.') for 900ms → Ask BacheIn modal opened with 'Lock test.' pre-filled in the ask-bachein-input textarea (verified via input_value()). Modal testIDs 'ask-bachein-btn' and 'ask-bachein-input' appeared post-long-press. (6) Native voice-oath code path reviewed in VoiceListener.native.tsx — start() calls AudioModule.requestRecordingPermissionsAsync(), returns clear error 'Microphone permission denied. Please enable it in Settings → Bachein → Microphone.' when denied (line 51), then recorder.prepareToRecordAsync() → recorder.record() → on stop calls recorder.stop() → FileSystem.readAsStringAsync(uri, {encoding:'base64'}) → forwards to /api/documents/voice-oath. Code path is sound; the review-flagged permission fix is in place. Backend E2E through this pipeline is confirmed by test_voice_oath_transcribes_and_matches passing (transcript='I acknowledge this information is confidential and agree not to disclose it', 100% word match).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_ai_voice.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "No fixes needed for reported issues — all 6 review-request items are verified working.",
+    "Optional/nit (non-blocking): chat.tsx is 596 lines, still under the 700-line guideline; consider splitting History and Provider modals into their own files for maintainability.",
+    "Optional/nit (non-blocking): chat.tsx:187 & :190 still use global alert() (fine on web but not RN-safe). Consider Alert.alert().",
+    "Optional/nit (non-blocking): VoiceListener.native.tsx swallows read/record errors and sends empty audio_base64 on failure — backend then returns empty transcript with no diagnostic surfaced to the user. Could bubble up a 'Recording failed, try again' toast."
+  ],
+  "critical_code_review_comments": [
+    "BacheinAiLogo.tsx correctly uses Image + require('../../assets/images/ai_logo.jpg') — single source of truth for the b\\ mark. Used consistently in chat.tsx (welcome + per-response header), _layout.tsx (AI tab icon), and PlansSheet.tsx (header).",
+    "SignatureBottomSheet.tsx PanResponder migration is correct: onStartShouldSetPanResponder + onMoveShouldSetPanResponder both true, onPanResponderTerminationRequest returns false to prevent unwanted release, currentPath ref pattern avoids state-race erasure across strokes. Paths accumulate into setPaths((p) => [...p, currentPath]) on grant, and the current stroke is mutated in place on move — this is the standard, correct pattern.",
+    "document/[id].tsx:186-192 wraps the doc body Text in <Pressable onLongPress delayLongPress={400}> which pre-fills setAskText(doc.content) and opens the Ask BacheIn modal — verified end-to-end.",
+    "chat.tsx render layout for AI responses: no backgroundColor on s.msgAi style (line 535), text lives directly in s.msgAiText with no card/box — matches spec of 'embedded plain text, no white box'. Single s.convDisclaimer only appears once after the LAST assistant message, not per-message.",
+    "voice-oath happy path and lock-after-5 both pass reliably against Azure Speech (short-audio REST via ffmpeg WAV conversion). Backend is production-ready."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (4/4 pytest, iter6 suite re-run under iter7)",
+    "frontend": "100% (6/6 review items verified: message rendering, b\\ logo x3, attach btn, signature drawing multi-stroke, long-press Ask BacheIn pre-fill, native voice-oath code path)"
+  },
+  "seed_data_creation": "None new. Reused TEST_iter6_lock_doc and TEST_iter6_voice_oath_doc from iteration 6, plus test_voice_oath_locks_after_5_failures re-creates a fresh doc each run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reuse /app/backend/tests/test_iter6_ai_voice.py for regression. Requires ffmpeg + espeak-ng installed. Frontend login testIDs: login-email-input / login-password-input / login-submit-button (not login-email/login-password/login-submit). AI workspace testIDs: ai-workspace, ai-history-btn, ai-plan-chip, ai-input, ai-provider-btn, ai-attach-btn, ai-mic-btn, ai-send-btn. Document view testIDs: document-detail-screen, ask-bachein-fab; long-press on doc body Text pops the Ask BacheIn modal with ask-bachein-input pre-filled. Secure create flow steps: intent-input → draft-btn (waits ~15s for AI) → goto-security-btn → goto-security-btn-2 → goto-sign-btn → open-sig-sheet. Signature pad accepts mouse events via PanResponder on web; verify by count of svg path elements after drawing.",
+  "rca_of_issue": "N/A — all reported bugs (AI white box, per-message provider label, missing logo image, missing attach btn, signature erasure, long-press pre-fill, native voice-oath permission) are already fixed by E1's Phase 3+ changes. Confirmed end-to-end."
+}

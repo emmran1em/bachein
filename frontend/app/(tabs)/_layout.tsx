@@ -2,6 +2,7 @@ import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { View, StyleSheet, Pressable, Text } from 'react-native';
 import { theme } from '@/src/theme';
+import BacheinAiLogo from '@/src/components/BacheinAiLogo';
 
 /**
  * Center create-button rendered as a Tab.Screen with a custom tabBarButton so
@@ -41,7 +42,7 @@ export default function TabsLayout() {
         listeners={{ tabPress: (e) => { e.preventDefault(); router.push('/create'); } }}
       />
       <Tabs.Screen name="filekit" options={{ title: 'File Kit', tabBarIcon: ({ color, size }) => <Ionicons name="construct-outline" size={size} color={color} /> }} />
-      <Tabs.Screen name="chat" options={{ title: 'AI', tabBarIcon: ({ color, size }) => <Ionicons name="sparkles-outline" size={size} color={color} /> }} />
+      <Tabs.Screen name="chat" options={{ title: 'AI', tabBarIcon: ({ size }) => <BacheinAiLogo size={size + 2} /> }} />
       {/* Hidden but reachable via drawer / links */}
       <Tabs.Screen name="vault" options={{ href: null }} />
       <Tabs.Screen name="profile" options={{ href: null }} />

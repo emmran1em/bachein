@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable, TextInput, Image, ActivityIndicator, Platform, KeyboardAvoidingView, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Modal, Pressable, TextInput, Image, ActivityIndicator, Platform, KeyboardAvoidingView, Dimensions, PanResponder } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
@@ -72,18 +72,37 @@ export default function SignatureBottomSheet({
     reset();
   };
 
-  // Signature pad handlers
-  const onTouchStart = (e: any) => {
-    const { locationX, locationY } = e.nativeEvent;
-    currentPath.current = `M${locationX.toFixed(1)},${locationY.toFixed(1)}`;
-    setPaths((p) => [...p, currentPath.current]);
-  };
-  const onTouchMove = (e: any) => {
-    const { locationX, locationY } = e.nativeEvent;
-    currentPath.current += ` L${locationX.toFixed(1)},${locationY.toFixed(1)}`;
-    setPaths((p) => [...p.slice(0, -1), currentPath.current]);
-  };
-  const onTouchEnd = () => { currentPath.current = ''; };
+  // Signature pad — PanResponder for reliable cross-platform gestures (fixes erasure bug)
+  const padRef = useRef<View | null>(null);
+  const padOrigin = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (e) => {
+        const x = (e.nativeEvent as any).locationX ?? 0;
+        const y = (e.nativeEvent as any).locationY ?? 0;
+        currentPath.current = `M${x.toFixed(1)},${y.toFixed(1)}`;
+        setPaths((p) => [...p, currentPath.current]);
+      },
+      onPanResponderMove: (e) => {
+        const x = (e.nativeEvent as any).locationX ?? 0;
+        const y = (e.nativeEvent as any).locationY ?? 0;
+        currentPath.current += ` L${x.toFixed(1)},${y.toFixed(1)}`;
+        setPaths((p) => {
+          if (p.length === 0) return [currentPath.current];
+          const next = p.slice();
+          next[next.length - 1] = currentPath.current;
+          return next;
+        });
+      },
+      onPanResponderRelease: () => { currentPath.current = ''; },
+      onPanResponderTerminate: () => { currentPath.current = ''; },
+    })
+  ).current;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
@@ -119,13 +138,9 @@ export default function SignatureBottomSheet({
           {mode === 'draw' && (
             <>
               <View
+                ref={padRef}
                 style={s.pad}
-                onStartShouldSetResponder={() => true}
-                onMoveShouldSetResponder={() => true}
-                onResponderGrant={onTouchStart}
-                onResponderMove={onTouchMove}
-                onResponderRelease={onTouchEnd}
-                onResponderTerminate={onTouchEnd}
+                {...panResponder.panHandlers}
               >
                 <Svg width="100%" height="100%">
                   {paths.map((p, i) => (

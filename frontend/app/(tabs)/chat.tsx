@@ -7,6 +7,7 @@ import { api } from '@/src/api';
 import DotsLoader from '@/src/components/DotsLoader';
 import BacheinAiLogo from '@/src/components/BacheinAiLogo';
 import PlansSheet from '@/src/components/PlansSheet';
+import * as DocumentPicker from 'expo-document-picker';
 
 type Msg = { id?: string; role: 'user' | 'assistant'; content: string; provider?: string; ts?: string; source?: string };
 type Provider = {
@@ -202,6 +203,15 @@ export default function AiWorkspace() {
   };
   const stopVoice = () => { try { recogRef.current?.stop(); } catch {}; setVoiceOn(false); };
 
+  const pickAttachment = async () => {
+    try {
+      const r = await DocumentPicker.getDocumentAsync({ type: ['image/*', 'application/pdf', 'text/*', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], multiple: false, copyToCacheDirectory: true });
+      if (r.canceled) return;
+      const f = r.assets?.[0]; if (!f) return;
+      setInput((prev) => (prev ? prev + '\n' : '') + `[Attached: ${f.name}] `);
+    } catch (e) { /* ignore */ }
+  };
+
   const savePinned = async (id: string, pinned: boolean) => {
     try { await api.aiwPatchConversation(id, { pinned }); const c: any = await api.aiwConversations(); setConvs(c.conversations); } catch {}
   };
@@ -267,8 +277,7 @@ export default function AiWorkspace() {
                   {m.role === 'assistant' && (
                     <View style={s.aiHeaderRow}>
                       <BacheinAiLogo size={22} />
-                      <Text style={s.aiName}>{providers.find((p) => p.id === m.provider)?.name || 'BacheIn AI'}</Text>
-                      {m.source === 'byo' && <View style={s.byoBadge}><Text style={s.byoBadgeText}>YOUR KEY</Text></View>}
+                      <Text style={s.aiName}>BacheIn</Text>
                     </View>
                   )}
                   {m.role === 'user' ? (
@@ -276,7 +285,6 @@ export default function AiWorkspace() {
                   ) : (
                     <View style={s.msgAi}>
                       <Text style={s.msgAiText} selectable>{m.content}</Text>
-                      <Text style={s.aiDisclaimer}>AI can make mistakes. Please double-check important info.</Text>
                     </View>
                   )}
                 </View>
@@ -286,12 +294,16 @@ export default function AiWorkspace() {
                 <View style={s.msgAiWrap}>
                   <View style={s.aiHeaderRow}>
                     <BacheinAiLogo size={22} />
-                    <Text style={s.aiName}>{activeProvider?.name || 'BacheIn AI'}</Text>
+                    <Text style={s.aiName}>BacheIn</Text>
                   </View>
-                  <View style={[s.msgAi, { paddingVertical: 18 }]}>
+                  <View style={[s.msgAi, { paddingVertical: 14 }]}>
                     <DotsLoader />
                   </View>
                 </View>
+              )}
+
+              {messages.length > 0 && !sending && messages[messages.length - 1]?.role === 'assistant' && (
+                <Text style={s.convDisclaimer}>AI can make mistake, please check important info.</Text>
               )}
             </View>
           )}
@@ -310,6 +322,9 @@ export default function AiWorkspace() {
               multiline
             />
             <View style={s.composerRow}>
+              <Pressable testID="ai-attach-btn" onPress={pickAttachment} style={s.micBtn}>
+                <Ionicons name="attach" size={16} color={theme.colors.brand} />
+              </Pressable>
               <Pressable testID="ai-provider-btn" onPress={() => setShowProviderPicker(true)} style={s.modelChipInline}>
                 <View style={s.modelDot} />
                 <Text style={s.modelChipText}>{activeProvider?.name || 'Model'}</Text>
@@ -517,11 +532,12 @@ const s = StyleSheet.create({
   msgUser: { alignSelf: 'flex-end', maxWidth: '85%', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 20, borderBottomRightRadius: 6, marginTop: 12, backgroundColor: theme.colors.brand },
   msgUserText: { color: '#fff', fontSize: 14, lineHeight: 20 },
   msgAiWrap: { alignSelf: 'flex-start', maxWidth: '95%', marginTop: 14 },
-  msgAi: { backgroundColor: theme.colors.card, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 18, borderTopLeftRadius: 6, borderWidth: 1, borderColor: theme.colors.border, marginTop: 4 },
-  msgAiText: { color: theme.colors.brand, fontSize: 14, lineHeight: 20 },
+  msgAi: { paddingHorizontal: 0, paddingVertical: 6, marginTop: 4 },
+  msgAiText: { color: theme.colors.brand, fontSize: 15, lineHeight: 22 },
   aiHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  aiName: { color: theme.colors.muted, fontSize: 11, letterSpacing: 0.5, fontWeight: '500' },
+  aiName: { color: theme.colors.brand, fontSize: 13, letterSpacing: 0.2, fontWeight: '500' },
   aiDisclaimer: { color: theme.colors.muted, fontSize: 10, marginTop: 8, fontStyle: 'italic' },
+  convDisclaimer: { color: theme.colors.muted, fontSize: 11, textAlign: 'center', marginTop: 20, fontStyle: 'italic' },
   composerWrap: { padding: 12, paddingBottom: 20, backgroundColor: theme.colors.surface },
   composerCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: theme.colors.border, borderRadius: 24, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10 },
   input: { minHeight: 30, maxHeight: 140, color: theme.colors.brand, fontSize: 14, paddingVertical: 4 },
