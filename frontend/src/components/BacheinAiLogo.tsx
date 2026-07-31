@@ -9,7 +9,7 @@ export default function BacheinAiLogo({ size = 40 }: { size?: number }) {
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
       <Image
-        source={require('../../assets/images/ai_logo.jpg')}
+        source={require('../../assets/images/bachein-ai.png')}
         style={{ width: size, height: size, resizeMode: 'contain' }}
       />
     </View>

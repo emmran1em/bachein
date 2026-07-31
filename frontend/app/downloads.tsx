@@ -12,6 +12,7 @@ type DL = { id: string; name: string; kind: string; size: number; created_at: st
 const KIND_META: Record<string, { icon: any; label: string }> = {
   question_paper: { icon: 'school-outline', label: 'Question Paper' },
   answer_paper: { icon: 'create-outline', label: 'Answer Booklet' },
+  scan: { icon: 'scan-outline', label: 'Scanned PDF' },
 };
 
 export default function DownloadsScreen() {
@@ -153,6 +154,17 @@ export default function DownloadsScreen() {
               </View>
             ) : (
               <View style={{ marginTop: 8 }}>
+                <Pressable
+                  testID="dl-action-open"
+                  style={s.action}
+                  onPress={() => { const it = menuFor; setMenuFor(null); if (it) router.push({ pathname: '/viewer', params: { url: api.downloadFileUrl(it.id), name: it.name } }); }}
+                >
+                  <Ionicons name="eye-outline" size={20} color={theme.colors.brand} />
+                  <View>
+                    <Text style={s.actionText}>Open</Text>
+                    <Text style={s.actionSub}>View inside Bachein</Text>
+                  </View>
+                </Pressable>
                 <Pressable testID="dl-action-share" style={s.action} onPress={() => menuFor && doShare(menuFor)}>
                   <Ionicons name="share-social-outline" size={20} color={theme.colors.brand} />
                   <View>

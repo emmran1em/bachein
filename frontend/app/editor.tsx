@@ -42,6 +42,12 @@ export default function Editor() {
   const [collabs, setCollabs] = useState<any[]>([]);
   const [importing, setImporting] = useState(false);
   const [imagesOpen, setImagesOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findText, setFindText] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+  const [pageSetupOpen, setPageSetupOpen] = useState(false);
+  const [pageSetup, setPageSetup] = useState<{ margins: string; header: string; footer: string; page_numbers: boolean }>({ margins: 'normal', header: '', footer: '', page_numbers: true });
   const richRef = useRef<any>(null);
   const autosaveT = useRef<any>(null);
 
@@ -113,15 +119,70 @@ export default function Editor() {
       const res = await fetch(`${API_BASE}/editor/export-pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ id: docId, title, doc_type: docType, html }),
+        body: JSON.stringify({ id: docId, title, doc_type: docType, html, page_setup: pageSetup }),
       });
       const blob = await res.blob();
       if (Platform.OS === 'web') {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url; a.download = `${title}.pdf`; a.click();
+      } else {
+        const base64: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        const dest = `${FileSystem.cacheDirectory}${title.replace(/[^a-zA-Z0-9._-]/g, '_')}.pdf`;
+        await FileSystem.writeAsStringAsync(dest, base64, { encoding: 'base64' as any });
+        const Sharing = await import('expo-sharing');
+        if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(dest, { mimeType: 'application/pdf' });
       }
       toast.show('PDF exported ✓', 'success');
     } catch (e: any) { toast.show(e.message, 'error'); }
+  };
+
+  // ── Phase 8: Word-style tools ──
+  const findReplaceAll = () => {
+    const find = findText.trim();
+    if (!find) return;
+    const esc = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(esc, 'gi');
+    let count = 0;
+    // only replace in text nodes, never inside HTML tags
+    const newHtml = html.split(/(<[^>]+>)/g).map((part) => {
+      if (part.startsWith('<')) return part;
+      return part.replace(re, () => { count++; return replaceText; });
+    }).join('');
+    if (count === 0) { toast.show(`"${find}" not found`, 'error'); return; }
+    setHtml(newHtml);
+    richRef.current?.setContentHTML?.(newHtml);
+    scheduleAutosave();
+    setFindOpen(false);
+    toast.show(`Replaced ${count} occurrence${count > 1 ? 's' : ''} ✓`, 'success');
+  };
+
+  const applyFontSize = (n: number) => {
+    richRef.current?.setFontSize?.(n as any);
+    setToolsOpen(false);
+  };
+
+  const proofread = async () => {
+    setToolsOpen(false);
+    setAiBusy(true);
+    setAiMode('Proofreading…');
+    try {
+      const r: any = await api.editorAi({
+        doc_type: docType, current_html: html,
+        instruction: 'Proofread this document: fix ALL spelling mistakes, grammar errors and punctuation. Keep the exact same content, structure and formatting — only correct errors.',
+      });
+      if (r.html) {
+        setHtml(r.html);
+        richRef.current?.setContentHTML?.(r.html);
+        scheduleAutosave();
+        toast.show('Spelling & grammar corrected ✓', 'success');
+      }
+    } catch (e: any) { toast.show(e.message || 'Proofread failed', 'error'); }
+    finally { setAiBusy(false); setAiMode(''); }
   };
 
   // ── Phase 7: Import an existing document into the editor ──
@@ -261,6 +322,9 @@ export default function Editor() {
             {docType}{aiMode ? ` · ${aiMode}` : ''}{savedAt ? ` · saved ${savedAt}` : ''}{saving ? ' · saving…' : ''}
           </Text>
         </View>
+        <Pressable testID="tools-btn" onPress={() => setToolsOpen(true)} style={s.headBtn}>
+          <Ionicons name="construct-outline" size={16} color={theme.colors.brand} />
+        </Pressable>
         <Pressable testID="images-btn" onPress={() => setImagesOpen(true)} style={s.headBtn}>
           <Ionicons name="image-outline" size={16} color={theme.colors.brand} />
         </Pressable>
@@ -297,11 +361,13 @@ export default function Editor() {
           iconTint={theme.colors.brand}
           style={s.toolbar}
           actions={[
-            actions.setBold, actions.setItalic, actions.setUnderline,
+            actions.setBold, actions.setItalic, actions.setUnderline, actions.setStrikethrough,
             actions.heading1, actions.heading2, actions.heading3,
             actions.insertBulletsList, actions.insertOrderedList,
+            actions.indent, actions.outdent,
             actions.blockquote, actions.code, actions.insertLink,
             actions.alignLeft, actions.alignCenter, actions.alignRight,
+            actions.removeFormat,
             actions.undo, actions.redo,
           ]}
           iconMap={{
@@ -333,6 +399,98 @@ export default function Editor() {
         )}
       </KeyboardAvoidingView>
 
+      <Modal visible={toolsOpen} transparent animationType="fade" onRequestClose={() => setToolsOpen(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.inviteSheet}>
+            <Text style={s.inviteTitle}>Document tools</Text>
+            <Pressable testID="tool-find-replace" style={s.imgAction} onPress={() => { setToolsOpen(false); setFindOpen(true); }}>
+              <Ionicons name="search-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Find & Replace</Text>
+                <Text style={s.imgActionSub}>Replace every occurrence across the document</Text>
+              </View>
+            </Pressable>
+            <Pressable testID="tool-page-setup" style={s.imgAction} onPress={() => { setToolsOpen(false); setPageSetupOpen(true); }}>
+              <Ionicons name="document-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Page setup</Text>
+                <Text style={s.imgActionSub}>Margins, header, footer, page numbers (PDF export)</Text>
+              </View>
+            </Pressable>
+            <Pressable testID="tool-proofread" style={s.imgAction} onPress={proofread}>
+              <Ionicons name="checkmark-done-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Spelling & grammar check</Text>
+                <Text style={s.imgActionSub}>AI proofreads and fixes every mistake</Text>
+              </View>
+            </Pressable>
+            <View style={[s.imgAction, { borderBottomWidth: 0 }]}>
+              <Ionicons name="text-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Font size (selection)</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+                  {[['S', 2], ['M', 3], ['L', 5], ['XL', 7]].map(([lbl, v]) => (
+                    <Pressable key={String(lbl)} testID={`font-size-${lbl}`} style={s.fontChip} onPress={() => applyFontSize(Number(v))}>
+                      <Text style={s.fontChipText}>{lbl}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            </View>
+            <Pressable testID="close-tools" style={[s.cancelBtn, { marginTop: 14 }]} onPress={() => setToolsOpen(false)}>
+              <Text style={s.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={findOpen} transparent animationType="fade" onRequestClose={() => setFindOpen(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.inviteSheet}>
+            <Text style={s.inviteTitle}>Find & Replace</Text>
+            <TextInput testID="find-input" style={s.input} value={findText} onChangeText={setFindText} placeholder="Find…" placeholderTextColor={theme.colors.muted} />
+            <TextInput testID="replace-input" style={[s.input, { marginTop: 8 }]} value={replaceText} onChangeText={setReplaceText} placeholder="Replace with…" placeholderTextColor={theme.colors.muted} />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+              <Pressable style={s.cancelBtn} onPress={() => setFindOpen(false)}>
+                <Text style={s.cancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable testID="replace-all-btn" style={[s.primaryBtn, { flex: 1 }]} onPress={findReplaceAll}>
+                <Text style={s.primaryBtnText}>Replace all</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={pageSetupOpen} transparent animationType="fade" onRequestClose={() => setPageSetupOpen(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.inviteSheet}>
+            <Text style={s.inviteTitle}>Page setup</Text>
+            <Text style={s.psLabel}>MARGINS</Text>
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              {['narrow', 'normal', 'wide'].map((m) => (
+                <Pressable key={m} testID={`margin-${m}`} style={[s.fontChip, pageSetup.margins === m && s.fontChipActive]} onPress={() => setPageSetup((p) => ({ ...p, margins: m }))}>
+                  <Text style={[s.fontChipText, pageSetup.margins === m && { color: '#fff' }]}>{m[0].toUpperCase() + m.slice(1)}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={s.psLabel}>HEADER TEXT</Text>
+            <TextInput testID="header-input" style={s.input} value={pageSetup.header} onChangeText={(t) => setPageSetup((p) => ({ ...p, header: t }))} placeholder="Shown at the top of every page" placeholderTextColor={theme.colors.muted} />
+            <Text style={s.psLabel}>FOOTER TEXT</Text>
+            <TextInput testID="footer-input" style={s.input} value={pageSetup.footer} onChangeText={(t) => setPageSetup((p) => ({ ...p, footer: t }))} placeholder="Shown at the bottom of every page" placeholderTextColor={theme.colors.muted} />
+            <Pressable testID="page-numbers-toggle" style={s.psToggle} onPress={() => setPageSetup((p) => ({ ...p, page_numbers: !p.page_numbers }))}>
+              <Ionicons name={pageSetup.page_numbers ? 'checkbox' : 'square-outline'} size={19} color={theme.colors.brand} />
+              <Text style={s.imgActionTitle}>Page numbers</Text>
+            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+              <Pressable style={[s.primaryBtn, { flex: 1 }]} testID="page-setup-done" onPress={() => { setPageSetupOpen(false); toast.show('Page setup will be applied on PDF export ✓', 'success'); }}>
+                <Text style={s.primaryBtnText}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={imagesOpen} transparent animationType="fade" onRequestClose={() => setImagesOpen(false)}>
         <View style={s.modalOverlay}>
           <View style={s.inviteSheet}>
@@ -363,7 +521,7 @@ export default function Editor() {
         <View style={s.modalOverlay}>
           <View style={s.inviteSheet}>
             <Text style={s.inviteTitle}>Invite a collaborator</Text>
-            <Text style={s.inviteSub}>They'll get an email with a magic link to open this document.</Text>
+            <Text style={s.inviteSub}>They&apos;ll get an email with a magic link to open this document.</Text>
             <TextInput
               testID="invite-email-input"
               style={s.input} value={inviteEmail} onChangeText={setInviteEmail}
@@ -427,6 +585,11 @@ const s = StyleSheet.create({
   imgAction: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider },
   imgActionTitle: { color: theme.colors.brand, fontSize: 14, fontWeight: '500' },
   imgActionSub: { color: theme.colors.muted, fontSize: 11, marginTop: 2 },
+  fontChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+  fontChipActive: { backgroundColor: theme.colors.brand, borderColor: theme.colors.brand },
+  fontChipText: { color: theme.colors.brand, fontSize: 12.5, fontWeight: '600' },
+  psLabel: { color: theme.colors.muted, fontSize: 10, letterSpacing: 1, marginTop: 14, marginBottom: 6 },
+  psToggle: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
   editorHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.border, backgroundColor: theme.colors.card },
   titleInline: { color: theme.colors.brand, fontSize: 15, fontWeight: '500', paddingVertical: 4 },
   modeLine: { color: theme.colors.muted, fontSize: 10 },

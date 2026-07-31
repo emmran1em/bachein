@@ -151,12 +151,18 @@ export const api = {
   editorTypes: () => request('/editor/types'),
   editorList: () => request('/editor/list'),
   editorGet: (id: string) => request(`/editor/${id}`),
-  editorSave: (body: { id?: string; title: string; doc_type: string; html: string; plain_text?: string }) =>
+  editorSave: (body: { id?: string; title: string; doc_type: string; html: string; plain_text?: string; page_setup?: any }) =>
     request('/editor/save', { method: 'POST', body: JSON.stringify(body) }),
   editorAi: (body: { doc_type: string; current_html: string; instruction: string }) =>
     request('/editor/ai-command', { method: 'POST', body: JSON.stringify(body) }),
   editorImport: (body: { file_base64: string; filename: string }) =>
     request('/editor/import', { method: 'POST', body: JSON.stringify(body) }),
+  editorVersions: (id: string) => request(`/editor/${id}/versions`),
+  // ─── Scanner (Phase 11) ───
+  scannerProcess: (image_base64: string, mode = 'color') =>
+    request('/scanner/process', { method: 'POST', body: JSON.stringify({ image_base64, mode }) }),
+  scannerCreatePdf: (images: string[], name?: string) =>
+    request('/scanner/create-pdf', { method: 'POST', body: JSON.stringify({ images, name }) }),
   editorInvite: (body: { document_id: string; email: string; permission: string }) =>
     request('/editor/invite', { method: 'POST', body: JSON.stringify(body) }),
   signedPdfUrl: (id: string) => `${API}/documents/${id}/signed-pdf`,

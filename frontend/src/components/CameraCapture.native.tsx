@@ -211,8 +211,3 @@ const s = StyleSheet.create({
   primaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: theme.colors.brand },
   primaryText: { color: '#fff', fontWeight: '500', fontSize: 13 },
 });
-rWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff' },
-  secondaryText: { color: theme.colors.brand, fontWeight: '500', fontSize: 13 },
-  primaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, backgroundColor: theme.colors.brand },
-  primaryText: { color: '#fff', fontWeight: '500', fontSize: 13 },
-});

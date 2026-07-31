@@ -205,6 +205,7 @@ class EditorDocSave(BaseModel):
     doc_type: str  # Movie Story, NDA, etc.
     html: str
     plain_text: Optional[str] = ""
+    page_setup: Optional[Dict[str, Any]] = None  # {margins, header, footer, page_numbers}
 
 class EditorAiRequest(BaseModel):
     doc_type: str
@@ -1324,14 +1325,208 @@ async def editor_ai(req: EditorAiRequest, user=Depends(get_current_user)):
 
 @api.post("/editor/export-pdf")
 async def editor_export_pdf(req: EditorDocSave, user=Depends(get_current_user)):
-    # Strip HTML tags to plain text (simple)
+    # Phase 8 — print-layout export with margins / header / footer / page numbers
     import re as _re
-    plain = _re.sub(r"<[^>]+>", " ", req.html or "")
-    plain = _re.sub(r"\s+", " ", plain).strip()
-    pdf = text_to_pdf(req.title or "Document", plain, watermark=f"bachein • {user['email']}")
+    import io as _io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.pdfgen import canvas as _canvas
+    import textwrap as _tw
+
+    ps = req.page_setup or {}
+    margin_map = {"narrow": 1.27, "normal": 2.54, "wide": 3.81}
+    m = margin_map.get(str(ps.get("margins", "normal")).lower(), 2.54) * cm
+    header = (ps.get("header") or "").strip()
+    footer = (ps.get("footer") or "").strip()
+    page_numbers = bool(ps.get("page_numbers", True))
+
+    # HTML → simple block list (headings kept bold/larger)
+    html = req.html or ""
+    blocks = []
+    for mt in _re.finditer(r"<(h1|h2|h3|p|li|blockquote|div)[^>]*>([\s\S]*?)</\1>", html, _re.I):
+        tag = mt.group(1).lower()
+        txt = _re.sub(r"<[^>]+>", " ", mt.group(2))
+        txt = _re.sub(r"\s+", " ", txt).strip()
+        if txt:
+            blocks.append((tag, txt))
+    if not blocks:
+        plain = _re.sub(r"<[^>]+>", " ", html)
+        plain = _re.sub(r"\s+", " ", plain).strip()
+        blocks = [("p", chunk) for chunk in _tw.wrap(plain, 5000)] or [("p", "")]
+
+    buf = _io.BytesIO()
+    c = _canvas.Canvas(buf, pagesize=A4)
+    W, H = A4
+    state = {"y": H - m, "page": 0}
+
+    def chrome():
+        state["page"] += 1
+        c.setFont("Helvetica", 8)
+        c.setFillColorRGB(0.45, 0.45, 0.5)
+        if header:
+            c.drawCentredString(W / 2, H - m / 2, header[:110])
+            c.setLineWidth(0.4)
+            c.line(m, H - m / 2 - 4, W - m, H - m / 2 - 4)
+        if footer:
+            c.drawString(m, m / 2, footer[:80])
+        if page_numbers:
+            c.drawRightString(W - m, m / 2, f"Page {state['page']}")
+        c.setFillColorRGB(0.42, 0.42, 0.42)
+        c.setFont("Helvetica", 7)
+        c.drawString(m, 0.35 * cm, f"bachein • {user['email']}")
+        c.setFillColorRGB(0.1, 0.1, 0.12)
+        state["y"] = H - m
+
+    def new_page():
+        c.showPage()
+        chrome()
+
+    chrome()
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(m, state["y"] - 6, (req.title or "Document")[:80])
+    state["y"] -= 34
+
+    sizes = {"h1": (14, True), "h2": (12.5, True), "h3": (11.5, True), "blockquote": (10, False)}
+    for tag, txt in blocks[:2000]:
+        size, bold = sizes.get(tag, (10.5, False))
+        leading = size + 5
+        prefix = "•  " if tag == "li" else ""
+        wrapw = max(30, int((W - 2 * m) / (size * 0.5)))
+        for chunk in _tw.wrap(prefix + txt, wrapw) or [""]:
+            if state["y"] < m + leading:
+                new_page()
+            c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+            c.drawString(m + (10 if tag == "blockquote" else 0), state["y"] - size, chunk)
+            state["y"] -= leading
+        state["y"] -= 4 if tag in ("p", "li") else 9
+    c.showPage()
+    c.save()
+    pdf = buf.getvalue()
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{(req.title or "document").replace(" ","_")}.pdf"'
     })
+
+
+@api.get("/editor/{doc_id}/versions")
+async def editor_versions(doc_id: str, user=Depends(get_current_user)):
+    doc = await db.editor_docs.find_one({"id": doc_id}, {"_id": 0, "versions": 1, "owner_id": 1, "collaborators": 1, "title": 1})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    if doc.get("owner_id") != user["id"] and not any(c.get("email") == user["email"] for c in doc.get("collaborators", [])):
+        raise HTTPException(403, "Forbidden")
+    versions = doc.get("versions") or []
+    return {"title": doc.get("title"), "versions": list(reversed(versions[-30:]))}
+
+
+# ══════════════ Phase 11 — Document Scanner ══════════════
+class ScanProcessRequest(BaseModel):
+    image_base64: str
+    mode: str = "color"  # color | bw
+
+
+@api.post("/scanner/process")
+async def scanner_process(req: ScanProcessRequest, user=Depends(get_current_user)):
+    """Edge detection + perspective correction + enhancement (OKEN-style)."""
+    import numpy as _np
+    import cv2 as _cv2
+    import base64 as _b64
+    try:
+        arr = _np.frombuffer(_b64.b64decode(req.image_base64), dtype=_np.uint8)
+        img = _cv2.imdecode(arr, _cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("bad image")
+    except Exception:
+        raise HTTPException(400, "Could not read image")
+
+    found = False
+    out = img
+    try:
+        h, w = img.shape[:2]
+        scale = 700.0 / max(h, w)
+        small = _cv2.resize(img, (int(w * scale), int(h * scale)))
+        gray = _cv2.cvtColor(small, _cv2.COLOR_BGR2GRAY)
+        gray = _cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = _cv2.Canny(gray, 50, 150)
+        edges = _cv2.dilate(edges, _np.ones((3, 3), _np.uint8), iterations=2)
+        cnts, _ = _cv2.findContours(edges, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
+        best = None
+        for cnt in sorted(cnts, key=_cv2.contourArea, reverse=True)[:5]:
+            peri = _cv2.arcLength(cnt, True)
+            approx = _cv2.approxPolyDP(cnt, 0.02 * peri, True)
+            if len(approx) == 4 and _cv2.contourArea(approx) > 0.2 * small.shape[0] * small.shape[1]:
+                best = approx
+                break
+        if best is not None:
+            pts = (best.reshape(4, 2) / scale).astype("float32")
+            s = pts.sum(axis=1)
+            d = _np.diff(pts, axis=1).flatten()
+            tl, br = pts[_np.argmin(s)], pts[_np.argmax(s)]
+            tr, bl = pts[_np.argmin(d)], pts[_np.argmax(d)]
+            wA = _np.linalg.norm(br - bl); wB = _np.linalg.norm(tr - tl)
+            hA = _np.linalg.norm(tr - br); hB = _np.linalg.norm(tl - bl)
+            mw, mh = int(max(wA, wB)), int(max(hA, hB))
+            if mw > 100 and mh > 100:
+                M = _cv2.getPerspectiveTransform(
+                    _np.array([tl, tr, br, bl], dtype="float32"),
+                    _np.array([[0, 0], [mw - 1, 0], [mw - 1, mh - 1], [0, mh - 1]], dtype="float32"))
+                out = _cv2.warpPerspective(img, M, (mw, mh))
+                found = True
+    except Exception:
+        out = img
+
+    # Enhancement
+    try:
+        if req.mode == "bw":
+            g = _cv2.cvtColor(out, _cv2.COLOR_BGR2GRAY)
+            g = _cv2.adaptiveThreshold(g, 255, _cv2.ADAPTIVE_THRESH_GAUSSIAN_C, _cv2.THRESH_BINARY, 21, 10)
+            out = _cv2.cvtColor(g, _cv2.COLOR_GRAY2BGR)
+        else:
+            lab = _cv2.cvtColor(out, _cv2.COLOR_BGR2LAB)
+            l, a, b = _cv2.split(lab)
+            l = _cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
+            out = _cv2.cvtColor(_cv2.merge((l, a, b)), _cv2.COLOR_LAB2BGR)
+    except Exception:
+        pass
+
+    import base64 as _b64
+    ok, enc = _cv2.imencode(".jpg", out, [_cv2.IMWRITE_JPEG_QUALITY, 82])
+    if not ok:
+        raise HTTPException(500, "Encoding failed")
+    return {"image_base64": _b64.b64encode(enc.tobytes()).decode(), "found_document": found}
+
+
+class ScanPdfRequest(BaseModel):
+    images: List[str]
+    name: Optional[str] = None
+
+
+@api.post("/scanner/create-pdf")
+async def scanner_create_pdf(req: ScanPdfRequest, user=Depends(get_current_user)):
+    if not req.images:
+        raise HTTPException(400, "No pages")
+    import base64 as _b64
+    import fitz
+    doc = fitz.open()
+    for b64 in req.images[:30]:
+        try:
+            img_bytes = _b64.b64decode(b64)
+            imgdoc = fitz.open(stream=img_bytes, filetype="jpg")
+            rect = imgdoc[0].rect
+            page = doc.new_page(width=rect.width, height=rect.height)
+            page.insert_image(rect, stream=img_bytes)
+        except Exception:
+            continue
+    if doc.page_count == 0:
+        raise HTTPException(400, "Could not build PDF from pages")
+    pdf_bytes = doc.tobytes()
+    name = (req.name or f"Scan {datetime.now(timezone.utc).strftime('%d %b %H:%M')}")[:90]
+    dl = {
+        "id": str(uuid.uuid4()), "user_id": user["id"], "name": name, "kind": "scan",
+        "ref_id": "", "size": len(pdf_bytes),
+        "pdf_b64": _b64.b64encode(pdf_bytes).decode(), "created_at": now_iso(),
+    }
+    await db.downloads.insert_one(dict(dl))
+    return {"download_id": dl["id"], "pages": doc.page_count, "size": len(pdf_bytes), "name": name}
 
 
 @api.post("/editor/invite")

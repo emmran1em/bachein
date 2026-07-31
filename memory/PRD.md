@@ -1,32 +1,41 @@
-# Bachein — PRD (v5: Word-class AI Editor + Collaboration + Verified Domain)
+# Bachein — PRD (v6: Board-Grade Question Papers + Evaluated Booklets + Edit Assignment)
 
-## Shipped in V5 (this session)
-- **Resend domain verified & wired**: RESEND_FROM is now `Bachein <noreply@eddingtun.com>` — all emails (doc received, OTP, magic link, signed notifications, collaboration invites, PDF attachments) now deliver universally.
-- **A. Word-class AI Editor** at `/editor` — full implementation, not a placeholder.
-  - 15 document type picker (Movie Story, Novel, Legal Agreement, NDA, Patent, Business Proposal, Investor Pitch, Research Paper, Technical Documentation, Teacher Question Paper, Resume, Meeting Notes, Contract, Policy Document, Other)
-  - Profession-aware AI backend: each doc type maps to a specialized system prompt — **Director Mode** for stories, **Lawyer Mode** for legal/NDA/contract, **Teacher Mode** for question papers, **Patent Attorney Mode** for patents, **Business Strategist**, **Pitch Coach**, **Researcher**, **Engineer (Technical writer)**, **Career Coach (resume)**, **Notes Mode**, **Policy Writer**, plus a generic **Assistant Mode**
-  - Real rich-text editor (`react-native-pell-rich-editor`): bold/italic/underline, H1/H2/H3, bullet & numbered lists, blockquote, code, links, left/center/right alignment, undo/redo
-  - **AI Command Bar** above the editor — natural-language instructions like "Make all headings Times New Roman size 22" are sent to Gemini 3.1 Pro with the profession-aware system prompt and the current HTML; response rewrites the document
-  - Autosave every 3s of inactivity + save button + "saved 14:32" indicator
-  - Version history stored on every save (previous HTML pushed to `versions` array)
-  - Export to PDF (server renders via reportlab with brand watermark)
-  - Backend: `/editor/types`, `/editor/save`, `/editor/list`, `/editor/{id}`, `/editor/ai-command`, `/editor/export-pdf`
-- **Add Collaborator** (invite co-authors)
-  - Top-right invite button opens a modal with email + permission picker (view / comment / edit / admin)
-  - Backend `/editor/invite` upserts collaborator on the doc, auto-creates the user if new, issues a 14-day magic-link token targeting the editor doc, sends a branded invite email via Resend from `noreply@eddingtun.com`
-  - Magic-link consume now honors `editor_doc_id` and redirects invitees straight into the editor
-  - Collaborators list rendered under the editor with permission badges
-- **Fixes carried in**:
-  - Web upload actually works (platform-aware Blob/File handling in `uploadFile` & `fileToolUpload`)
-  - CORS `expose_headers` for compression size headers
-  - Signature step: Draw / Type / **Attach from photos** (3rd mode via expo-image-picker)
+## Shipped in V6 (this session)
+- **Phase 4 v2 — Question Paper Creator (production)** at `/ai/question-paper`
+  - Inputs: Board (CBSE/ICSE/State/IB), Academic Year (2022-23…2026-27), Class 6-12, class-aware Subject list (6-10: Maths Standard/Basic, Science, Social Science, English, Tamil, IT · 11-12: Maths, Physics, Chemistry, Biology, CS, English, Yoga), Difficulty (Easy/Moderate/Board Level/Challenging), Number of Sets (1-3), optional chapters
+  - Background job pipeline: blueprint LLM call → per-section question calls → PDF render; progress + progress_pct polled by UI
+  - **Official CBSE-format PDF** (reportlab platypus): Series code, SET-n, Q.P. Code box, Roll No boxes, NOTE box, centered title, Time/Max Marks, General Instructions, sections with marks lines, marks column, OR internal choices, "Page x of y" + P.T.O. footers
+  - **Real embedded figures** via matplotlib (`qp_engine.render_figure`): graphs (expressions), bar/line/pie, geometry primitives (polygon/circle/segment/arc/point/text/rect/arrow), flowcharts, tables
+  - Preview screen with per-question regenerate, per-section regenerate, Generate Another Set, Download/Share, Print (web)
+  - Endpoints: GET `/aiw/qp-options`, POST `/aiw/question-paper`, POST `/aiw/question-papers/{id}/regenerate` (q_no|section), POST `/aiw/question-papers/{id}/new-set`, GET `/aiw/question-papers/{id}` (poll), GET `.../pdf?token=`
+- **Phase 5 v2 — Evaluated Topper Answer Booklet** at `/ai/answer-paper`
+  - Upload PDF (text or scanned → vision transcription per page, up to 8 pages), image, txt, or paste text
+  - Pipeline: transcribe → extract ALL questions → answer in batches of 6 → merge; long papers fully answered
+  - **Evaluated ruled-booklet PDF** (`answer_engine.render_evaluated_booklet`): blue rules + red margin, Q numbers in margin, red ✓ ticks per step, step marks (+0.5) at right, circled per-question totals (x/y), examiner remarks, front-page TOTAL box, section headers, embedded answer diagrams
+  - UI: progress screen, EXAMINER TOTAL card, jump-to-question chips with marks, per-answer award badges/ticks/remarks, booklet PDF share
+- **Phase 6 — Downloads** at `/downloads` (done previous iteration): auto-saved generated PDFs, ⋯ menu Share (native sheet)/Rename/Delete; entries auto-registered by both generators; regenerate re-renders the stored PDF
+- **Phase 7 — Edit Assignment** in `/editor`
+  - "Or edit an existing document" import (PDF/DOCX/TXT → HTML via POST `/api/editor/import`, python-docx + PyMuPDF)
+  - Images modal: "Insert image position" adds numbered `[Image Position N]` placeholder at cursor; "Upload & auto-insert images" maps Image i → Position i (extras appended)
+- **Face auto-capture** (previous iteration): live polling of POST `/api/documents/face-detect` (Haar), oval turns green, "hold still", auto-captures (native + web)
+- Voice Oath confirmed working in Expo Go (expo-audio foreground recording + Azure Speech backend) — no build required
 
-## Still queued in your priority order (F ✅ B ✅ I ✅ A ✅ → C → D → E → G → H)
-- **C** Personal cloud workspace with 12 folders + storage quota + Free tier
-- **D** Real-time collaboration (WebSockets, live cursors, presence indicators, comments)
-- **E** System document handler (already declared in app.json — activates on EAS build)
-- **G** GitHub Workspace connector (OAuth creds stored, shell live at `/github`)
-- **H** Push notifications (needs FCM/Expo push token setup)
+## Key modules
+- `/app/backend/qp_engine.py` — subject catalog, figure renderer, CBSE PDF renderer
+- `/app/backend/answer_engine.py` — evaluated booklet renderer
+- `/app/backend/ai_workspace.py` — AI routes incl. background tasks (_generate_paper_task, _answer_paper_task, _regen_task)
+- `/app/backend/downloads_routes.py` — downloads CRUD + file serving
+- matplotlib added to requirements.txt
 
-## Backend endpoints total (all live)
-Auth · Google OAuth · Magic link + lookup · Face enroll/status · Documents CRUD · OTP send/verify · Face-verify (real Haar + pHash) · Voice-oath (real Whisper transcript match) · Sign · Status · Signed PDF · Audit PDF · Vault · AI generate/review/chat · Chat sessions · Chat actions · File upload · File-tools convert / compress-image / compress-pdf · **Editor types / save / list / get / ai-command / export-pdf / invite**
+## Known limitations / notes
+- RichEditor body doesn't render on the **web preview** (react-native-webview limitation) — works on native; optional web fallback pending
+- Syllabus/blueprint accuracy comes from LLM knowledge (no live CBSE website crawl)
+- Face verification match still Haar/pHash (AWS Rekognition pending)
+
+## Still queued (user's roadmap)
+- Phase 8: Write Editor — full MS Word toolset (margins, headers/footers, spell check, find/replace, print layout)
+- Phase 9: Saved Drafts + Collaboration History (version history UI)
+- Phase 10: File Kit additions (Protect/Unlock Document, OCR, PDF enhancement)
+- Phase 11: Document Scanner (edge detection, multi-page, perspective correction)
+- AWS Rekognition face match · System document handler (EAS build) · GitHub connector · Push notifications
+- Refactor: split server.py into routers (auth/documents)

@@ -233,6 +233,9 @@ export default function Home() {
             <DrawerItem icon="folder-open-outline" label="Documents" onPress={() => goTo('/(tabs)/received')} testID="drawer-docs" />
             <DrawerItem icon="sparkles-outline" label="Bachein AI" onPress={() => goTo('/(tabs)/chat')} testID="drawer-ai" />
             <DrawerItem icon="construct-outline" label="File Kit" onPress={() => goTo('/(tabs)/filekit')} testID="drawer-tools" />
+            <DrawerItem icon="download-outline" label="Downloads" onPress={() => goTo('/downloads')} testID="drawer-downloads" />
+            <DrawerItem icon="documents-outline" label="Saved Drafts" onPress={() => goTo('/drafts')} testID="drawer-drafts" />
+            <DrawerItem icon="scan-outline" label="Scan Document" onPress={() => goTo('/scanner')} testID="drawer-scanner" />
             <DrawerItem icon="lock-closed-outline" label="Vault" onPress={() => goTo('/(tabs)/vault')} testID="drawer-vault" />
             <DrawerItem icon="logo-github" label="GitHub Workspace" onPress={() => goTo('/github')} testID="drawer-github" />
             <DrawerItem icon="ribbon-outline" label="Plans & Upgrade" onPress={() => goTo('/plans')} testID="drawer-plans" />
