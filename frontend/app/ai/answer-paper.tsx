@@ -27,8 +27,14 @@ export default function AnswerPaperScreen() {
   const [board, setBoard] = useState('');
   const [detail, setDetail] = useState('standard');
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [record, setRecord] = useState<any>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [err, setErr] = useState('');
+  const pollRef = React.useRef<any>(null);
+  const scrollRef = React.useRef<ScrollView>(null);
+  const ansPositions = React.useRef<Record<string, number>>({});
+
+  React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const pickFile = async () => {
     setErr('');
@@ -57,11 +63,31 @@ export default function AnswerPaperScreen() {
     } catch (e: any) { setErr(e.message || 'File pick failed'); }
   };
 
+  const startPolling = (id: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setJobId(id);
+    pollRef.current = setInterval(async () => {
+      try {
+        const r: any = await api.aiwAnswerPaper1(id);
+        setRecord(r);
+        if (r.status === 'ready') {
+          clearInterval(pollRef.current); pollRef.current = null;
+          setBusy(false);
+        } else if (r.status === 'failed') {
+          clearInterval(pollRef.current); pollRef.current = null;
+          setBusy(false);
+          setErr(r.error || 'Analysis failed — please retry');
+          setRecord(null);
+        }
+      } catch {}
+    }, 4000);
+  };
+
   const generate = async () => {
     setErr('');
     if (mode === 'upload' && !file) { setErr('Upload a question paper first'); return; }
     if (mode === 'paste' && pasted.trim().length < 10) { setErr('Paste the question paper text first'); return; }
-    setBusy(true); setResult(null);
+    setBusy(true); setRecord(null);
     try {
       const body: any = {
         subject, class_level: classLevel, board, detail, language: 'English',
@@ -69,17 +95,23 @@ export default function AnswerPaperScreen() {
       if (mode === 'upload' && file) { body.file_base64 = file.base64; body.filename = file.name; }
       else body.text = pasted;
       const r: any = await api.aiwAnswerPaper(body);
-      setResult(r);
-    } catch (e: any) { setErr(e.message || 'Analysis failed'); }
-    finally { setBusy(false); }
+      setRecord({ status: 'generating', progress: 'Queued…', progress_pct: 0 });
+      startPolling(r.id);
+    } catch (e: any) { setErr(e.message || 'Analysis failed'); setBusy(false); }
   };
 
   const download = async () => {
-    if (!result?.id) return;
-    try { await sharePdf(api.aiwAnswerPaperPdfUrl(result.id), 'answer-booklet.pdf'); } catch {}
+    if (!jobId) return;
+    try { await sharePdf(api.aiwAnswerPaperPdfUrl(jobId), 'evaluated-answer-booklet.pdf'); } catch {}
   };
 
-  const ans = result?.answers;
+  const jumpTo = (qNo: string) => {
+    const y = ansPositions.current[qNo];
+    if (y !== undefined) scrollRef.current?.scrollTo({ y: Math.max(0, y - 20), animated: true });
+  };
+
+  const generating = record?.status === 'generating';
+  const ans = record?.status === 'ready' ? record?.answers : null;
 
   return (
     <SafeAreaView style={s.container} edges={['top']} testID="ap-screen">
@@ -96,8 +128,8 @@ export default function AnswerPaperScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 60 }}>
-        {!result && (
+      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: 20, paddingBottom: 60 }}>
+        {!ans && !generating && (
           <>
             <View style={s.segment}>
               <Pressable testID="ap-mode-upload" style={[s.segBtn, mode === 'upload' && s.segActive]} onPress={() => setMode('upload')}>
@@ -161,51 +193,97 @@ export default function AnswerPaperScreen() {
                 </>
               )}
             </Pressable>
-            {busy && <Text style={s.busyHint}>Analyzing the paper and writing your booklet — this can take up to a minute…</Text>}
+            {busy && <Text style={s.busyHint}>Starting the analysis…</Text>}
             <Text style={s.disclaimer}>AI can make mistake, please check important info.</Text>
           </>
         )}
 
-        {result && (
+        {generating && (
+          <View style={s.genWrap} testID="ap-generating">
+            <BacheinAiLogo size={54} />
+            <Text style={s.genTitle}>Writing your evaluated booklet…</Text>
+            <View style={s.progressTrack}>
+              <View style={[s.progressFill, { width: `${Math.max(4, record?.progress_pct || 0)}%` }]} />
+            </View>
+            <Text style={s.genStage}>{record?.progress || 'Queued…'}</Text>
+            <Text style={s.busyHint}>Every question gets a topper answer with examiner marking. Accuracy over speed — long papers can take several minutes.</Text>
+            <DotsLoader color={theme.colors.brand} />
+          </View>
+        )}
+
+        {ans && (
           <View>
-            <Text style={s.paperTitle}>{ans?.title || 'Answer Booklet'}</Text>
-            {!!ans?.total_marks && <Text style={s.paperMeta}>Total: {ans.total_marks} marks · {(ans?.answers || []).length} answers</Text>}
+            <Text style={s.paperTitle}>{ans?.title || 'Evaluated Answer Booklet'}</Text>
+            <View style={s.totalCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.totalLabel}>EXAMINER TOTAL</Text>
+                <Text style={s.totalValue}>
+                  {ans.total_awarded ?? '—'}{ans.max_marks ? ` / ${ans.max_marks}` : ''}
+                </Text>
+              </View>
+              <Text style={s.totalCount}>{(ans?.answers || []).length} answers</Text>
+            </View>
             <View style={s.savedRow}>
               <Ionicons name="checkmark-circle" size={14} color="#16a34a" />
-              <Text style={s.savedText}>Saved to your Downloads</Text>
+              <Text style={s.savedText}>Saved to your Downloads — evaluated booklet PDF</Text>
             </View>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-              <Pressable testID="ap-new" style={s.secondaryBtn} onPress={() => { setResult(null); setFile(null); }}>
+              <Pressable testID="ap-new" style={s.secondaryBtn} onPress={() => { setRecord(null); setJobId(null); setFile(null); }}>
                 <Ionicons name="add-circle-outline" size={14} color={theme.colors.brand} />
                 <Text style={s.secondaryText}>New</Text>
               </Pressable>
               <Pressable testID="ap-download" style={s.primaryBtn} onPress={download}>
                 <Ionicons name="share-outline" size={16} color="#fff" />
-                <Text style={s.primaryText}>Booklet PDF</Text>
+                <Text style={s.primaryText}>Evaluated Booklet PDF</Text>
               </Pressable>
             </View>
 
+            <Text style={s.jumpLabel}>JUMP TO QUESTION</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+              {(ans?.answers || []).map((a: any, i: number) => (
+                <Pressable key={i} testID={`ap-jump-${a.q_no}`} style={s.jumpChip} onPress={() => jumpTo(String(a.q_no))}>
+                  <Text style={s.jumpQ}>Q{a.q_no}</Text>
+                  <Text style={s.jumpM}>{a.marks_awarded ?? a.marks}/{a.marks}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
             {(ans?.answers || []).map((a: any, i: number) => (
-              <View key={i} style={s.card}>
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+              <View
+                key={i}
+                style={s.card}
+                onLayout={(e) => { ansPositions.current[String(a.q_no)] = e.nativeEvent.layout.y; }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Text style={s.qNo}>Q{a.q_no}.</Text>
-                  {!!a.marks && <Text style={s.qMarks}>[{a.marks}m]</Text>}
+                  {!!a.section && <Text style={s.qSection}>Sec {String(a.section).replace('SECTION', '').trim()}</Text>}
+                  <View style={s.awardBadge}>
+                    <Text style={s.awardText}>{a.marks_awarded ?? a.marks} / {a.marks}</Text>
+                  </View>
                 </View>
                 {!!a.question && <Text style={s.question}>{a.question}</Text>}
                 {(a.steps || []).map((st: any, j: number) => (
                   <View key={j} style={s.stepRow}>
-                    <Text style={s.stepText}>{typeof st === 'string' ? st : st.text}</Text>
+                    <Text style={s.stepText}>{typeof st === 'string' ? st : st.text} <Text style={s.tick}>✓</Text></Text>
                     {!!st?.marks && <Text style={s.stepMarks}>+{st.marks}</Text>}
                   </View>
                 ))}
-                {!!a.final_answer && <Text style={s.finalAns}>∴ {a.final_answer}</Text>}
-                {!!a.examiner_tip && <Text style={s.tip}>Examiner: {a.examiner_tip}</Text>}
+                {a.figure?.kind && a.figure.kind !== 'none' && (
+                  <View style={s.figBox}>
+                    <Ionicons name="image-outline" size={13} color={theme.colors.muted} />
+                    <Text style={s.figLabel}>{a.figure.caption || `Diagram (${a.figure.kind})`} — drawn inside the booklet PDF</Text>
+                  </View>
+                )}
+                {!!a.final_answer && <Text style={s.finalAns}>∴ {a.final_answer} <Text style={s.tick}>✓</Text></Text>}
+                {!!(a.examiner_remark || a.examiner_tip) && <Text style={s.tip}>Examiner: {a.examiner_remark || a.examiner_tip}</Text>}
               </View>
             ))}
-            {!ans && result?.raw_text && (
-              <View style={s.card}><Text style={s.stepText}>{result.raw_text}</Text></View>
+            {!!ans?.summary_remark && (
+              <View style={[s.card, { borderColor: '#e5b8b8' }]}>
+                <Text style={[s.tip, { marginTop: 0 }]}>Examiner's overall remark: {ans.summary_remark}</Text>
+              </View>
             )}
-            <Text style={s.disclaimer}>{result?.disclaimer || 'AI can make mistake, please check important info.'}</Text>
+            <Text style={s.disclaimer}>AI can make mistake, please check important info.</Text>
           </View>
         )}
       </ScrollView>
@@ -254,4 +332,23 @@ const s = StyleSheet.create({
   stepMarks: { color: '#16a34a', fontSize: 11, fontWeight: '600', marginTop: 3 },
   finalAns: { color: theme.colors.brand, fontSize: 14, fontWeight: '600', marginTop: 10 },
   tip: { color: '#8a6d3b', fontSize: 11, marginTop: 8, fontStyle: 'italic' },
+  genWrap: { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 16, gap: 14 },
+  genTitle: { color: theme.colors.brand, fontSize: 20, fontWeight: '500', letterSpacing: -0.3 },
+  progressTrack: { alignSelf: 'stretch', height: 6, borderRadius: 3, backgroundColor: theme.colors.border, overflow: 'hidden' },
+  progressFill: { height: 6, borderRadius: 3, backgroundColor: theme.colors.brand },
+  genStage: { color: theme.colors.brand, fontSize: 13, fontWeight: '500', textAlign: 'center' },
+  totalCard: { flexDirection: 'row', alignItems: 'center', marginTop: 12, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1.5, borderColor: '#d64545', padding: 14 },
+  totalLabel: { color: '#d64545', fontSize: 10, letterSpacing: 1, fontWeight: '700' },
+  totalValue: { color: '#d64545', fontSize: 26, fontWeight: '700', marginTop: 2 },
+  totalCount: { color: theme.colors.muted, fontSize: 12 },
+  jumpLabel: { color: theme.colors.muted, fontSize: 10, letterSpacing: 1, marginTop: 18, marginBottom: 7 },
+  jumpChip: { alignItems: 'center', paddingHorizontal: 11, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff' },
+  jumpQ: { color: theme.colors.brand, fontSize: 12, fontWeight: '600' },
+  jumpM: { color: '#16a34a', fontSize: 10, fontWeight: '600' },
+  qSection: { color: theme.colors.muted, fontSize: 11 },
+  awardBadge: { marginLeft: 'auto', borderWidth: 1.3, borderColor: '#d64545', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  awardText: { color: '#d64545', fontSize: 11, fontWeight: '700' },
+  tick: { color: '#d64545', fontWeight: '700' },
+  figBox: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, backgroundColor: theme.colors.surface, borderRadius: 8, padding: 9, borderWidth: 1, borderColor: theme.colors.border },
+  figLabel: { color: theme.colors.muted, fontSize: 11, flex: 1 },
 });

@@ -588,119 +588,295 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         return {"explanation": reply, "provider": pid, "source": auth["source"],
                 "disclaimer": "AI can make mistakes. Please double-check important information."}
 
-    # ============== Phase 4 — Question Paper Creator ==============
+    # ============== Phase 4 — Question Paper Creator (board-grade) ==============
+    from qp_engine import (BOARDS as QP_BOARDS, DIFFICULTIES as QP_DIFFS, ACADEMIC_YEARS as QP_YEARS,
+                           subjects_for_class, gen_series_code, render_cbse_pdf)
+    from answer_engine import render_evaluated_booklet
+    import asyncio as _asyncio
+    import json as _json
+    import re as _re
+
+    def _parse_json(raw: str):
+        try:
+            return _json.loads(raw)
+        except Exception:
+            m = _re.search(r"\{[\s\S]*\}", raw or "")
+            if m:
+                try:
+                    return _json.loads(m.group(0))
+                except Exception:
+                    return None
+        return None
+
+    FIGURE_SPEC_DOC = (
+        '"figure" must be null OR EXACTLY one of these renderable specs:\n'
+        '{"kind":"graph","expressions":["x**2 - 4"],"x_range":[-5,5],"points":[[1,2,"A"]],"caption":"Fig. 1"}\n'
+        '{"kind":"bar","labels":["A","B"],"values":[3,5],"x_label":"","y_label":"","caption":""}   (also kind "line" or "pie")\n'
+        '{"kind":"geometry","shapes":[{"type":"polygon","points":[[0,0],[4,0],[2,3]]},{"type":"circle","center":[0,0],"radius":3},'
+        '{"type":"segment","points":[[0,0],[4,3]]},{"type":"point","at":[2,3],"label":"A"},{"type":"text","at":[1,0.5],"label":"60\u00b0"},'
+        '{"type":"arc","center":[0,0],"radius":1,"theta":[0,60]},{"type":"rect","at":[0,0],"w":2,"h":1,"label":"R"},'
+        '{"type":"arrow","points":[[0,0],[2,0]]}],"caption":"Fig. 2"}\n'
+        '{"kind":"flowchart","nodes":["Start","Step 1","End"],"caption":""}\n'
+        '{"kind":"table","rows":[["x","f(x)"],["1","3"]],"caption":""}\n'
+        "Expressions use python math syntax (x**2; allowed funcs: sin cos tan exp log sqrt abs; constants pi, e). "
+        "Geometry shapes must use concrete coordinates so the figure renders correctly. "
+        "EVERY diagram/graph/map/circuit question MUST include a renderable figure spec — never leave it as a text description."
+    )
+
+    QP_SYSTEM = (
+        "You are an official board examination paper setter with deep knowledge of official blueprints, "
+        "official sample question papers, question paper design documents, marking schemes, previous year board papers, "
+        "NCERT/prescribed textbooks, NCERT Exemplar and trusted educational publishers (Oswaal, Educart, Xam Idea, Arihant, "
+        "Together With, Physics Wallah, Vedantu, BYJU'S, LearnCBSE). Use that knowledge ONLY to match the authentic pattern, "
+        "syllabus, competency levels and question styles — generate NEW, ORIGINAL questions, never copy existing papers. "
+        "Output strict JSON only, no prose, no markdown fences."
+    )
+
+    @router.get("/qp-options")
+    async def qp_options(user=Depends(get_current_user)):
+        return {
+            "boards": QP_BOARDS, "difficulties": QP_DIFFS, "academic_years": QP_YEARS,
+            "classes": [str(i) for i in range(6, 13)],
+            "subjects": {str(i): subjects_for_class(str(i)) for i in range(6, 13)},
+        }
+
     class QuestionPaperIn(BaseModel):
-        board: str          # CBSE | ICSE | State | IB | Other
-        class_level: str    # 6-12
+        board: str = "CBSE"
+        academic_year: str = "2025-26"
+        class_level: str
         subject: str
-        chapters: List[str]
-        total_marks: int = 80
-        duration_minutes: int = 180
-        difficulty: str = "mixed"   # easy | medium | hard | mixed
-        include_case_studies: bool = True
-        include_diagrams: bool = True
-        include_maps: bool = False
-        include_graphs: bool = False
-        include_tables: bool = True
-        num_sections: int = 5
+        difficulty: str = "Board Level"   # Easy | Moderate | Board Level | Challenging
+        num_sets: int = 1
         language: str = "English"
+        chapters: List[str] = []
         provider: Optional[str] = None
+
+    def _qp_base_desc(p: dict) -> str:
+        chapters = f" Restrict to chapters: {', '.join(p['chapters'])}." if p.get("chapters") else " Cover the full prescribed syllabus."
+        return (
+            f"{p['board']} Class {p['class_level']} {p['subject']} board examination question paper for academic year {p['academic_year']}. "
+            f"STRICTLY use the syllabus, official blueprint and examination pattern applicable to the {p['academic_year']} session "
+            f"(account for any syllabus rationalisation or pattern changes of that year). Difficulty: {p['difficulty']}. Language: English only."
+            + chapters
+        )
+
+    async def _generate_paper_task(paper_id: str, user_id: str, auth: dict, p: dict):
+        async def prog(text, pct=None):
+            upd = {"progress": text}
+            if pct is not None:
+                upd["progress_pct"] = pct
+            await db.question_papers.update_one({"id": paper_id}, {"$set": upd})
+        try:
+            base = _qp_base_desc(p)
+            await prog("Analysing official blueprint, syllabus & previous-year pattern…", 5)
+            bp_prompt = (
+                f"Design the official examination blueprint for: {base}\n"
+                "Reproduce the REAL official pattern for that subject/class/year: correct section names (A, B, C, D, E as applicable), "
+                "exact question counts, question types (MCQ, Assertion-Reason, VSA, SA, LA, Case study, Competency-based, "
+                "diagram/graph-based, numericals, application-based), marks per question, internal choices, and total marks.\n"
+                "Return ONLY JSON:\n"
+                '{"title":"SUBJECT NAME (e.g. MATHEMATICS (STANDARD))","time_allowed":"3 hours","max_marks":80,\n'
+                ' "general_instructions":["(exact style of official general instructions, one per item, 8-11 items)"],\n'
+                ' "sections":[{"name":"SECTION A","description":"This section comprises Multiple Choice Questions of 1 mark each.",'
+                '"marks_line":"20 x 1 = 20","q_start":1,"q_end":20,"marks_each":1,'
+                '"types":"MCQ + Assertion-Reason","notes":"chapter coverage, competency %, internal choices, which questions need figures"}]}'
+            )
+            raw = await _call_llm(auth, QP_SYSTEM, bp_prompt, f"qpbp-{paper_id}")
+            bp = _parse_json(raw)
+            if not bp or not bp.get("sections"):
+                raise ValueError("Blueprint generation failed — please retry")
+
+            paper = {
+                "title": bp.get("title") or p["subject"].upper(),
+                "time_allowed": bp.get("time_allowed", "3 hours"),
+                "max_marks": bp.get("max_marks", 80),
+                "general_instructions": bp.get("general_instructions") or [],
+                "series": gen_series_code(),
+                "set_no": p.get("set_no", 1),
+                "sections": [],
+            }
+            n_secs = len(bp["sections"])
+            for idx, sec in enumerate(bp["sections"][:7]):
+                await prog(f"Writing {sec.get('name', 'Section')} — questions {sec.get('q_start', '')}\u2013{sec.get('q_end', '')} ({idx + 1}/{n_secs})…",
+                           10 + int(75 * (idx / max(1, n_secs))))
+                sec_prompt = (
+                    f"Paper: {base}\nPaper blueprint section to write now: {_json.dumps(sec)}\n"
+                    f"Set number: {p.get('set_no', 1)} (each set must have different questions of identical pattern/difficulty).\n\n"
+                    f"Write ALL questions Q{sec.get('q_start')} to Q{sec.get('q_end')} for this section, fully exam-ready and original.\n"
+                    "Rules:\n"
+                    "- Match official wording style, rigour and competency mix for this board/year.\n"
+                    "- MCQs: exactly 4 options. Assertion-Reason: use the standard official 4-option format.\n"
+                    "- Internal choices exactly where the official pattern has them (use or_choice).\n"
+                    "- Case studies: passage in text + 3-4 sub_questions with marks.\n"
+                    f"- {FIGURE_SPEC_DOC}\n\n"
+                    "Return ONLY JSON:\n"
+                    '{"questions":[{"q_no":"1","marks":1,"type":"MCQ",'
+                    '"text":"...","options":["...","...","...","..."],'
+                    '"figure":null,'
+                    '"or_choice":null or {"text":"...","options":[],"figure":null},'
+                    '"sub_questions":[] or [{"label":"(i)","text":"...","marks":1}]}]}'
+                )
+                sraw = await _call_llm(auth, QP_SYSTEM, sec_prompt, f"qpsec-{paper_id}-{idx}")
+                sp = _parse_json(sraw) or {}
+                paper["sections"].append({
+                    "name": sec.get("name", f"SECTION {chr(65 + idx)}"),
+                    "description": sec.get("description", ""),
+                    "marks_line": sec.get("marks_line", ""),
+                    "questions": sp.get("questions") or [],
+                })
+
+            await prog("Rendering printable board-format PDF…", 90)
+            pdf = render_cbse_pdf(paper, p)
+            name = f"{p['board']} Class {p['class_level']} {p['subject']} — Set {p.get('set_no', 1)} ({p['academic_year']})"
+            dl_id = await _register_download(user_id, name, "question_paper", pdf, paper_id)
+            await db.question_papers.update_one(
+                {"id": paper_id},
+                {"$set": {"paper": paper, "status": "ready", "progress": "", "progress_pct": 100, "download_id": dl_id}})
+        except Exception as e:
+            await db.question_papers.update_one(
+                {"id": paper_id},
+                {"$set": {"status": "failed", "error": str(e)[:400], "progress": ""}})
+
+    async def _rerender_paper_pdf(paper_id: str):
+        rec = await db.question_papers.find_one({"id": paper_id}, {"_id": 0})
+        if not rec or not rec.get("paper"):
+            return
+        import base64 as _b64
+        pdf = render_cbse_pdf(rec["paper"], rec.get("params", {}))
+        if rec.get("download_id"):
+            await db.downloads.update_one(
+                {"id": rec["download_id"]},
+                {"$set": {"pdf_b64": _b64.b64encode(pdf).decode(), "size": len(pdf)}})
 
     @router.post("/question-paper")
     async def create_question_paper(body: QuestionPaperIn, user=Depends(get_current_user)):
         settings = await _get_user_settings(user["id"])
         pid = body.provider or settings.get("default_provider", "gemini")
         auth = await _pick_key(user, pid)
+        num_sets = max(1, min(3, body.num_sets or 1))
         if auth["source"] != "byo":
             limits = _limits(settings.get("tier", "free"))
             used = await _quota_used(user["id"])
             if used["daily"] >= limits["daily"] or used["monthly"] >= limits["monthly"]:
                 raise HTTPException(402, "AI quota reached. Connect your own key.")
+            for _ in range(num_sets):
+                await _consume_quota(user["id"])
 
-        system = (
-            "You are an expert board-exam question paper setter. "
-            "You have deep knowledge of previous year papers, syllabus, marking schemes, and chapter weightage. "
-            "Generate authentic, exam-ready question papers with correct pattern, difficulty distribution, and marks. "
-            "You MUST output as strict JSON — no prose outside the JSON block."
-        )
-        prompt = (
-            f"Create a {body.board} Class {body.class_level} {body.subject} question paper.\n"
-            f"Chapters to cover: {', '.join(body.chapters) if body.chapters else 'all'}\n"
-            f"Total marks: {body.total_marks} · Duration: {body.duration_minutes} min · Difficulty: {body.difficulty} · Language: {body.language}\n"
-            f"Include: case_studies={body.include_case_studies}, diagrams={body.include_diagrams}, maps={body.include_maps}, "
-            f"graphs={body.include_graphs}, tables={body.include_tables}\n"
-            f"Sections: {body.num_sections}\n\n"
-            "Analyze previous-year trends and chapter weightage to prioritize the MOST PROBABLE questions.\n\n"
-            "Return ONLY this JSON schema (no markdown fences, just raw JSON):\n"
-            "{\n"
-            '  "title": "string",\n'
-            '  "meta": {"board":"", "class":"", "subject":"", "total_marks":0, "duration":"", "language":""},\n'
-            '  "general_instructions": ["string", ...],\n'
-            '  "sections": [\n'
-            '    {"name":"Section A","description":"", "questions":[\n'
-            '       {"q_no":"1","marks":1,"type":"MCQ|SA|LA|VSA|case_study","text":"","options":["a","b","c","d"],"answer":null,\n'
-            '        "figure":{"kind":"diagram|map|graph|table|none","caption":"","ascii":"","description":""},\n'
-            '        "sub_questions":[]}\n'
-            '     ]}\n'
-            '  ],\n'
-            '  "answer_key_available": true\n'
-            "}\n\n"
-            "Rules:\n"
-            "- Distribute marks EXACTLY to the total.\n"
-            "- Include case studies if requested with 3-4 sub-parts each.\n"
-            "- For diagrams/maps/graphs/tables, add 'figure' with ASCII/text description that a PDF renderer can transform into an image (be concrete).\n"
-            "- MCQs must include 4 options.\n"
-            "- Base weightage on typical previous-year patterns."
-        )
+        ids = []
+        for set_no in range(1, num_sets + 1):
+            paper_id = str(uuid.uuid4())
+            params = body.dict()
+            params["set_no"] = set_no
+            await db.question_papers.insert_one({
+                "id": paper_id, "user_id": user["id"], "params": params,
+                "status": "generating", "progress": "Queued…", "progress_pct": 0,
+                "paper": None, "created_at": _now_iso(),
+            })
+            _asyncio.create_task(_generate_paper_task(paper_id, user["id"], auth, params))
+            ids.append(paper_id)
+        return {"id": ids[0], "ids": ids, "status": "generating", "provider": pid, "source": auth["source"],
+                "disclaimer": "AI can make mistake, please check important info."}
+
+    class RegenIn(BaseModel):
+        q_no: Optional[str] = None
+        section: Optional[str] = None
+        provider: Optional[str] = None
+
+    async def _regen_task(paper_id: str, auth: dict, rec: dict, body_q_no, body_section):
         try:
-            raw = await _call_llm(auth, system, prompt, f"qp-{uuid.uuid4()}")
-        except HTTPException:
-            raise
+            paper = rec["paper"]
+            p = rec.get("params", {})
+            base = _qp_base_desc(p)
+            if body_q_no:
+                target_sec, target_q, qi = None, None, -1
+                for sec in paper.get("sections", []):
+                    for i, q in enumerate(sec.get("questions", [])):
+                        if str(q.get("q_no")) == str(body_q_no):
+                            target_sec, target_q, qi = sec, q, i
+                if not target_q:
+                    raise ValueError(f"Question {body_q_no} not found")
+                prompt = (
+                    f"Paper: {base}\nSection: {target_sec.get('name')}\n"
+                    f"Regenerate ONLY this question with a NEW original question of the SAME type, marks, chapter area and difficulty:\n"
+                    f"{_json.dumps(target_q)[:3000]}\n\n{FIGURE_SPEC_DOC}\n\n"
+                    'Return ONLY JSON for the single replacement question: {"q_no":"...","marks":1,"type":"...","text":"...","options":[],"figure":null,"or_choice":null,"sub_questions":[]}'
+                )
+                raw = await _call_llm(auth, QP_SYSTEM, prompt, f"qpregen-{paper_id}")
+                nq = _parse_json(raw)
+                if not nq or not nq.get("text"):
+                    raise ValueError("Regeneration failed")
+                nq["q_no"] = target_q.get("q_no")
+                nq["marks"] = target_q.get("marks")
+                target_sec["questions"][qi] = nq
+            elif body_section:
+                si, target_sec = -1, None
+                for i, sec in enumerate(paper.get("sections", [])):
+                    if str(sec.get("name", "")).strip().lower() == str(body_section).strip().lower():
+                        si, target_sec = i, sec
+                if not target_sec:
+                    raise ValueError(f"Section {body_section} not found")
+                qs = target_sec.get("questions", [])
+                sec_meta = {"name": target_sec.get("name"), "description": target_sec.get("description"),
+                            "q_start": qs[0].get("q_no") if qs else "", "q_end": qs[-1].get("q_no") if qs else "",
+                            "marks_each": qs[0].get("marks") if qs else ""}
+                prompt = (
+                    f"Paper: {base}\nRegenerate the ENTIRE section with NEW original questions of identical pattern/marks/types: {_json.dumps(sec_meta)}\n"
+                    f"Old questions for pattern reference (do NOT reuse content): {_json.dumps(qs)[:6000]}\n\n{FIGURE_SPEC_DOC}\n\n"
+                    'Return ONLY JSON: {"questions":[...same schema as before...]}'
+                )
+                raw = await _call_llm(auth, QP_SYSTEM, prompt, f"qpregen-{paper_id}")
+                sp = _parse_json(raw)
+                if not sp or not sp.get("questions"):
+                    raise ValueError("Section regeneration failed")
+                paper["sections"][si]["questions"] = sp["questions"]
+            await db.question_papers.update_one({"id": paper_id}, {"$set": {"paper": paper, "status": "ready", "progress": ""}})
+            await _rerender_paper_pdf(paper_id)
         except Exception as e:
-            raise HTTPException(500, f"AI error: {e}")
+            await db.question_papers.update_one({"id": paper_id}, {"$set": {"status": "ready", "progress": "", "error": str(e)[:300]}})
+
+    @router.post("/question-papers/{qp_id}/regenerate")
+    async def regenerate_question_paper(qp_id: str, body: RegenIn, user=Depends(get_current_user)):
+        rec = await db.question_papers.find_one({"id": qp_id, "user_id": user["id"]}, {"_id": 0})
+        if not rec or not rec.get("paper"):
+            raise HTTPException(404, "Paper not found or not ready")
+        if not body.q_no and not body.section:
+            raise HTTPException(400, "Provide q_no or section")
+        settings = await _get_user_settings(user["id"])
+        pid = body.provider or settings.get("default_provider", "gemini")
+        auth = await _pick_key(user, pid)
         if auth["source"] != "byo":
             await _consume_quota(user["id"])
+        await db.question_papers.update_one(
+            {"id": qp_id},
+            {"$set": {"status": "regenerating", "error": None,
+                      "progress": f"Regenerating {'Q' + str(body.q_no) if body.q_no else body.section}…"}})
+        _asyncio.create_task(_regen_task(qp_id, auth, rec, body.q_no, body.section))
+        return {"id": qp_id, "status": "regenerating"}
 
-        # Try to parse the JSON out of the model response
-        import json as _json, re as _re
-        parsed = None
-        # Try direct parse
-        try: parsed = _json.loads(raw)
-        except Exception:
-            # Strip code fences and re-try
-            m = _re.search(r"\{[\s\S]*\}", raw)
-            if m:
-                try: parsed = _json.loads(m.group(0))
-                except Exception: parsed = None
+    @router.post("/question-papers/{qp_id}/new-set")
+    async def question_paper_new_set(qp_id: str, user=Depends(get_current_user)):
+        rec = await db.question_papers.find_one({"id": qp_id, "user_id": user["id"]}, {"_id": 0})
+        if not rec:
+            raise HTTPException(404, "Not found")
+        settings = await _get_user_settings(user["id"])
+        params = dict(rec.get("params", {}))
+        pid = params.get("provider") or settings.get("default_provider", "gemini")
+        auth = await _pick_key(user, pid)
+        if auth["source"] != "byo":
+            await _consume_quota(user["id"])
+        existing = await db.question_papers.count_documents({"user_id": user["id"], "params.subject": params.get("subject"),
+                                                             "params.class_level": params.get("class_level"),
+                                                             "params.academic_year": params.get("academic_year")})
+        params["set_no"] = min(9, existing + 1)
+        new_id = str(uuid.uuid4())
+        await db.question_papers.insert_one({
+            "id": new_id, "user_id": user["id"], "params": params,
+            "status": "generating", "progress": "Queued…", "progress_pct": 0,
+            "paper": None, "created_at": _now_iso(),
+        })
+        _asyncio.create_task(_generate_paper_task(new_id, user["id"], auth, params))
+        return {"id": new_id, "status": "generating", "set_no": params["set_no"]}
 
-        # Persist
-        paper_id = str(uuid.uuid4())
-        record = {
-            "id": paper_id,
-            "user_id": user["id"],
-            "params": body.dict(),
-            "raw_text": raw,
-            "paper": parsed,
-            "created_at": _now_iso(),
-        }
-        await db.question_papers.insert_one(dict(record))
-
-        # Auto-save rendered PDF to Downloads section
-        try:
-            pdf_bytes = _render_paper_pdf(parsed or {}, record["params"])
-            await _register_download(user["id"], f"{body.board} Class {body.class_level} {body.subject} — Question Paper", "question_paper", pdf_bytes, paper_id)
-        except Exception:
-            pass
-
-        return {
-            "id": paper_id,
-            "paper": parsed,
-            "raw_text": raw if parsed is None else None,
-            "parsed": bool(parsed),
-            "provider": pid,
-            "source": auth["source"],
-            "disclaimer": "AI can make mistakes. Please verify against the official syllabus and previous year papers.",
-        }
 
     @router.get("/question-papers")
     async def list_question_papers(user=Depends(get_current_user)):
@@ -719,7 +895,7 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         p = await db.question_papers.find_one({"id": qp_id, "user_id": user["id"]}, {"_id": 0})
         if not p: raise HTTPException(404, "Not found")
         # Render to PDF
-        pdf_bytes = _render_paper_pdf(p.get("paper") or {}, p.get("params", {}))
+        pdf_bytes = render_cbse_pdf(p.get("paper") or {}, p.get("params", {}))
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"inline; filename=question-paper-{qp_id}.pdf"})
 
@@ -735,6 +911,105 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         language: str = "English"
         provider: Optional[str] = None
 
+    AP_SYSTEM = (
+        "You are a board topper and an official board examiner combined. You write PERFECT evaluated answer booklets "
+        "aligned to official marking schemes, evaluation guidelines, NCERT/NCERT Exemplar and trusted solution publishers "
+        "(Oswaal, Educart, Xam Idea, Arihant, Physics Wallah, Vedantu, LearnCBSE). "
+        "Output strict JSON only — no prose, no markdown fences."
+    )
+
+    async def _answer_paper_task(ap_id: str, user_id: str, auth: dict, params: dict, source_text: str, page_images: list):
+        async def prog(text, pct=None):
+            upd = {"progress": text}
+            if pct is not None:
+                upd["progress_pct"] = pct
+            await db.answer_papers.update_one({"id": ap_id}, {"$set": upd})
+        try:
+            # 1) Vision transcription for scanned papers / photos
+            if not source_text and page_images:
+                parts = []
+                for i, img in enumerate(page_images):
+                    await prog(f"Reading page {i + 1}/{len(page_images)} of the paper…", 2 + int(18 * i / len(page_images)))
+                    t = await _call_llm(
+                        auth, "You transcribe examination papers exactly. Output plain text only.",
+                        "Transcribe EVERY question on this page exactly — keep question numbers, marks, options and internal choices. Describe figures as [Figure: ...].",
+                        f"aptr-{ap_id}-{i}", image_b64=img)
+                    parts.append(t or "")
+                source_text = "\n".join(parts)
+            if len((source_text or "").strip()) < 10:
+                raise ValueError("Could not read the question paper")
+
+            # 2) Identify every question
+            await prog("Analysing the paper — identifying every question, marks and sections…", 22)
+            ex_prompt = (
+                "From this question paper, list EVERY question (keep internal choices and all sub-parts inside the question text).\n"
+                f"---\n{source_text[:22000]}\n---\n"
+                'Return ONLY JSON: {"title":"","subject":"","max_marks":0,'
+                '"questions":[{"q_no":"1","section":"A","marks":1,"type":"MCQ","text":"full question text including options/choices"}]}'
+            )
+            ex = _parse_json(await _call_llm(auth, AP_SYSTEM, ex_prompt, f"apex-{ap_id}"))
+            questions = (ex or {}).get("questions") or []
+            if not questions:
+                raise ValueError("Could not identify questions in the paper")
+
+            detail_map = {
+                "concise": "Crisp answers — exactly enough to score full marks.",
+                "standard": "Complete, well-structured topper answers.",
+                "detailed": "Elaborate topper answers with all working, labelled points and extra detail examiners love.",
+            }
+            meta = (f"Board: {params.get('board') or 'CBSE'} · Class: {params.get('class_level') or ''} · "
+                    f"Subject: {params.get('subject') or (ex or {}).get('subject', '')} · Language: {params.get('language', 'English')}")
+
+            # 3) Answer ALL questions in batches
+            all_answers = []
+            BATCH = 6
+            n_batches = (len(questions) + BATCH - 1) // BATCH
+            for bi in range(n_batches):
+                chunk = questions[bi * BATCH:(bi + 1) * BATCH]
+                first, last = chunk[0].get("q_no"), chunk[-1].get("q_no")
+                await prog(f"Writing topper answers Q{first}\u2013Q{last} ({bi + 1}/{n_batches})…", 25 + int(60 * bi / n_batches))
+                bprompt = (
+                    f"{meta}\n{detail_map.get(params.get('detail', 'standard'), detail_map['standard'])}\n"
+                    "Answer EVERY question below exactly like a board topper, aligned to the official marking scheme: "
+                    "step-wise working with marks per step, required formulas, full calculations, keywords examiners look for. "
+                    "For MCQs state the correct option AND a one-line reason. Where an internal choice exists, answer the better-scoring option. "
+                    "Also act as the examiner: give marks_awarded (a topper typically scores full or near-full) and a 1-line examiner_remark.\n\n"
+                    f"QUESTIONS:\n{_json.dumps(chunk)[:12000]}\n\n"
+                    f"When an answer needs a diagram/graph, include a renderable figure. {FIGURE_SPEC_DOC}\n\n"
+                    'Return ONLY JSON: {"answers":[{"q_no":"1","section":"A","question":"short restatement","marks":1,'
+                    '"steps":[{"text":"...","marks":0.5}],"final_answer":"...","figure":null,'
+                    '"marks_awarded":1,"examiner_remark":"..."}]}'
+                )
+                br = _parse_json(await _call_llm(auth, AP_SYSTEM, bprompt, f"apb-{ap_id}-{bi}"))
+                all_answers.extend((br or {}).get("answers") or [])
+
+            if not all_answers:
+                raise ValueError("Answer generation failed")
+
+            def _num(v):
+                try:
+                    return float(v)
+                except Exception:
+                    return 0.0
+            total_awarded = round(sum(_num(a.get("marks_awarded", a.get("marks", 0))) for a in all_answers), 1)
+            if total_awarded == int(total_awarded):
+                total_awarded = int(total_awarded)
+            data = {
+                "title": (ex or {}).get("title") or f"{params.get('subject') or 'Paper'} — Evaluated Answer Booklet",
+                "subject": (ex or {}).get("subject") or params.get("subject"),
+                "max_marks": (ex or {}).get("max_marks"),
+                "answers": all_answers,
+                "total_awarded": total_awarded,
+                "summary_remark": "Excellent presentation. Step-wise working shown clearly — keep diagrams labelled and conclusions highlighted.",
+            }
+            await prog("Rendering the evaluated answer booklet…", 90)
+            pdf = render_evaluated_booklet(data, params)
+            dl_id = await _register_download(user_id, str(data["title"])[:90], "answer_paper", pdf, ap_id)
+            await db.answer_papers.update_one({"id": ap_id}, {"$set": {
+                "answers": data, "status": "ready", "progress": "", "progress_pct": 100, "download_id": dl_id}})
+        except Exception as e:
+            await db.answer_papers.update_one({"id": ap_id}, {"$set": {"status": "failed", "error": str(e)[:400], "progress": ""}})
+
     @router.post("/answer-paper")
     async def create_answer_paper(body: AnswerPaperIn, user=Depends(get_current_user)):
         settings = await _get_user_settings(user["id"])
@@ -746,10 +1021,10 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
             if used["daily"] >= limits["daily"] or used["monthly"] >= limits["monthly"]:
                 raise HTTPException(402, "AI quota reached. Connect your own key.")
 
-        # ── Extract question paper text (or image for vision) ──
+        # ── Extract question paper text (or page images for vision) ──
         import base64 as _b64
         source_text = (body.text or "").strip()
-        image_b64: Optional[str] = None
+        page_images: List[str] = []
         if body.file_base64 and body.filename:
             fn = body.filename.lower()
             try:
@@ -760,98 +1035,41 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
                 try:
                     import fitz
                     pdf = fitz.open(stream=raw, filetype="pdf")
-                    source_text = "\n".join(p.get_text() for p in pdf)
+                    source_text = "\n".join(pg.get_text() for pg in pdf)
                     if len(source_text.strip()) < 40 and len(pdf) > 0:
-                        # Scanned PDF — render first page as image for vision models
-                        pix = pdf[0].get_pixmap(dpi=130)
-                        image_b64 = _b64.b64encode(pix.tobytes("jpeg")).decode()
+                        # Scanned PDF — render pages for vision transcription
+                        for pg in list(pdf)[:8]:
+                            pix = pg.get_pixmap(dpi=120)
+                            page_images.append(_b64.b64encode(pix.tobytes("jpeg")).decode())
                         source_text = ""
+                except HTTPException:
+                    raise
                 except Exception as e:
                     raise HTTPException(400, f"Could not parse PDF: {e}")
             elif fn.endswith((".txt", ".md")):
                 source_text = raw.decode(errors="ignore")
             elif fn.endswith((".jpg", ".jpeg", ".png", ".webp")):
-                image_b64 = body.file_base64
+                page_images = [body.file_base64]
             else:
                 raise HTTPException(400, "Unsupported file. Upload a PDF, image, or text file.")
-        if not source_text and not image_b64:
+        if not source_text and not page_images:
             raise HTTPException(400, "Provide a question paper — upload a file or paste the text.")
 
-        detail_map = {
-            "concise": "Keep each answer crisp — exactly enough to score full marks, no extra fluff.",
-            "standard": "Write complete, well-structured answers the way a school topper writes in a board exam.",
-            "detailed": "Write elaborate topper-level answers with all working steps, labelled points, and extra detail examiners love.",
-        }
-        system = (
-            "You are the school topper and a board-exam examiner combined. "
-            "You write PERFECT answer booklets: step-wise solutions, exact marking-scheme alignment, "
-            "and presentation exactly like a topper's ruled answer sheet. "
-            "You MUST output strict JSON only — no prose outside the JSON."
-        )
-        meta = f"Board: {body.board or 'unknown'} · Class: {body.class_level or 'unknown'} · Subject: {body.subject or 'unknown'} · Language: {body.language}"
-        prompt = (
-            f"Below is a question paper. Answer EVERY question like a topper in a board-exam answer booklet.\n{meta}\n"
-            f"{detail_map.get(body.detail, detail_map['standard'])}\n\n"
-            + (f"QUESTION PAPER TEXT:\n---\n{source_text[:14000]}\n---\n\n" if source_text else "The question paper is provided as an attached image — read every question from it.\n\n")
-            + "Return ONLY this JSON schema (raw JSON, no markdown fences):\n"
-            "{\n"
-            '  "title": "string",\n'
-            '  "subject": "string",\n'
-            '  "total_marks": 0,\n'
-            '  "answers": [\n'
-            '    {"q_no":"1","question":"short restatement of the question","marks":3,\n'
-            '     "steps":[{"text":"working / point written on the answer sheet","marks":1}],\n'
-            '     "final_answer":"the boxed/concluding line",\n'
-            '     "examiner_tip":"1-line note on how marks are awarded"}\n'
-            "  ]\n"
-            "}\n\n"
-            "Rules:\n"
-            "- Answer in the order questions appear. For MCQs state the option AND one-line reason.\n"
-            "- Split marks across steps exactly per typical board marking schemes.\n"
-            "- For diagrams describe what the topper would draw in [Diagram: ...] form.\n"
-            "- Use the requested language for the answers."
-        )
-        try:
-            raw_reply = await _call_llm(auth, system, prompt, f"ap-{uuid.uuid4()}", image_b64=image_b64)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(500, f"AI error: {e}")
         if auth["source"] != "byo":
             await _consume_quota(user["id"])
 
-        import json as _json, re as _re
-        parsed = None
-        try: parsed = _json.loads(raw_reply)
-        except Exception:
-            m = _re.search(r"\{[\s\S]*\}", raw_reply)
-            if m:
-                try: parsed = _json.loads(m.group(0))
-                except Exception: parsed = None
-
         ap_id = str(uuid.uuid4())
-        record = {
-            "id": ap_id, "user_id": user["id"],
-            "params": {"subject": body.subject, "class_level": body.class_level, "board": body.board,
-                       "detail": body.detail, "language": body.language, "filename": body.filename},
-            "raw_text": raw_reply, "answers": parsed, "created_at": _now_iso(),
-        }
-        await db.answer_papers.insert_one(dict(record))
+        params = {"subject": body.subject, "class_level": body.class_level, "board": body.board,
+                  "detail": body.detail, "language": body.language, "filename": body.filename}
+        await db.answer_papers.insert_one({
+            "id": ap_id, "user_id": user["id"], "params": params,
+            "status": "generating", "progress": "Queued…", "progress_pct": 0,
+            "answers": None, "created_at": _now_iso(),
+        })
+        _asyncio.create_task(_answer_paper_task(ap_id, user["id"], auth, params, source_text, page_images))
+        return {"id": ap_id, "status": "generating", "provider": pid, "source": auth["source"],
+                "disclaimer": "AI can make mistake, please check important info."}
 
-        # Auto-save the ruled booklet PDF to Downloads
-        try:
-            pdf_bytes = _render_booklet_pdf(parsed or {}, record["params"])
-            name = (parsed or {}).get("title") or f"{body.subject or 'Paper'} — Topper Answer Booklet"
-            await _register_download(user["id"], name, "answer_paper", pdf_bytes, ap_id)
-        except Exception:
-            pass
-
-        return {
-            "id": ap_id, "answers": parsed,
-            "raw_text": raw_reply if parsed is None else None,
-            "parsed": bool(parsed), "provider": pid, "source": auth["source"],
-            "disclaimer": "AI can make mistake, please check important info.",
-        }
 
     @router.get("/answer-papers")
     async def list_answer_papers(user=Depends(get_current_user)):
@@ -869,184 +1087,8 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         from fastapi.responses import Response
         p = await db.answer_papers.find_one({"id": ap_id, "user_id": user["id"]}, {"_id": 0})
         if not p: raise HTTPException(404, "Not found")
-        pdf_bytes = _render_booklet_pdf(p.get("answers") or {}, p.get("params", {}))
+        pdf_bytes = render_evaluated_booklet(p.get("answers") or {}, p.get("params", {}))
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"inline; filename=answer-booklet-{ap_id}.pdf"})
 
     return router
-
-
-def _render_paper_pdf(paper: dict, params: dict) -> bytes:
-    """Simple ReportLab renderer for question papers."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.units import cm
-    import io as _io, textwrap as _tw
-
-    buf = _io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    W, H = A4
-    x0, y0 = 2 * cm, H - 2 * cm
-
-    def line(text, y, size=10, bold=False):
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.drawString(x0, y, text[:120])
-
-    def wrap(text, y, size=10, indent=0, bold=False):
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        for chunk in _tw.wrap(text, width=90):
-            c.drawString(x0 + indent, y, chunk)
-            y -= size + 3
-        return y
-
-    title = paper.get("title") or f"{params.get('board','')} Class {params.get('class_level','')} — {params.get('subject','')} Question Paper"
-    line(title, y0, 14, True); y = y0 - 22
-    meta = paper.get("meta") or {}
-    metaline = f"Total Marks: {params.get('total_marks','')} · Duration: {params.get('duration_minutes','')} min · Language: {params.get('language','English')}"
-    line(metaline, y, 10); y -= 20
-
-    gi = paper.get("general_instructions") or []
-    if gi:
-        line("General Instructions:", y, 11, True); y -= 14
-        for i, ins in enumerate(gi, 1):
-            y = wrap(f"{i}. {ins}", y, 10, indent=8)
-        y -= 6
-
-    sections = paper.get("sections") or []
-    for sec in sections:
-        if y < 3 * cm: c.showPage(); y = H - 2 * cm
-        line(sec.get("name", "Section"), y, 12, True); y -= 14
-        if sec.get("description"):
-            y = wrap(sec.get("description"), y, 9, indent=0)
-        y -= 4
-        for q in (sec.get("questions") or []):
-            if y < 3 * cm: c.showPage(); y = H - 2 * cm
-            qn = q.get("q_no", "")
-            marks = q.get("marks", "")
-            head = f"Q{qn}. ({marks}m) [{q.get('type','')}]"
-            line(head, y, 10, True); y -= 12
-            y = wrap(q.get("text", ""), y, 10, indent=12)
-            opts = q.get("options") or []
-            for i, o in enumerate(opts):
-                y = wrap(f"({chr(97+i)}) {o}", y, 9, indent=24)
-            fig = q.get("figure") or {}
-            if fig and fig.get("kind") not in (None, "", "none"):
-                y = wrap(f"[Figure — {fig.get('kind','')}: {fig.get('caption','')}]", y, 9, indent=16, bold=True)
-                if fig.get("ascii"):
-                    for ln in (fig.get("ascii") or "").splitlines():
-                        c.setFont("Courier", 8)
-                        c.drawString(x0 + 20, y, ln[:80])
-                        y -= 10
-            sqs = q.get("sub_questions") or []
-            for j, sq in enumerate(sqs):
-                y = wrap(f"({chr(97+j)}) {sq if isinstance(sq, str) else sq.get('text', '')}", y, 9, indent=24)
-            y -= 4
-    c.showPage(); c.save()
-    return buf.getvalue()
-
-
-def _render_booklet_pdf(data: dict, params: dict) -> bytes:
-    """Render topper-style answers on a ruled board-exam answer booklet (blue rules + red margin)."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.units import cm
-    import io as _io, textwrap as _tw
-
-    buf = _io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    W, H = A4
-    left_edge = 1.1 * cm
-    margin_x = 2.9 * cm            # writing starts here (right of the red margin line)
-    red_x = margin_x - 0.45 * cm   # red vertical margin line
-    right = W - 1.4 * cm
-    top = H - 2.4 * cm
-    bottom = 1.8 * cm
-    gap = 21                       # rule spacing
-    state = {"y": top, "page": 0}
-
-    def draw_page():
-        state["page"] += 1
-        # ruled horizontal lines (light blue)
-        c.setStrokeColorRGB(0.72, 0.82, 0.94)
-        c.setLineWidth(0.7)
-        y = top
-        while y > bottom:
-            c.line(left_edge, y - 5, right, y - 5)
-            y -= gap
-        # red left margin line
-        c.setStrokeColorRGB(0.86, 0.32, 0.32)
-        c.setLineWidth(1.1)
-        c.line(red_x, H - 1.1 * cm, red_x, bottom - 0.6 * cm)
-        # page number
-        c.setFillColorRGB(0.45, 0.45, 0.5)
-        c.setFont("Helvetica", 8)
-        c.drawRightString(right, H - 1.3 * cm, f"Page {state['page']}")
-        c.setFillColorRGB(0.08, 0.08, 0.15)
-        state["y"] = top
-
-    def next_line():
-        state["y"] -= gap
-        if state["y"] < bottom:
-            c.showPage()
-            draw_page()
-
-    def write(text, size=10.5, bold=False, indent=0, margin_label=None, right_label=None, color=None):
-        wrap_width = max(30, int((right - margin_x - indent) / (size * 0.52)))
-        chunks = _tw.wrap(text, width=wrap_width) or [""]
-        for idx, chunk in enumerate(chunks):
-            if color: c.setFillColorRGB(*color)
-            else: c.setFillColorRGB(0.08, 0.08, 0.15)
-            c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-            c.drawString(margin_x + indent, state["y"], chunk)
-            if idx == 0 and margin_label:
-                c.setFont("Helvetica-Bold", 10.5)
-                c.setFillColorRGB(0.86, 0.32, 0.32)
-                c.drawString(left_edge + 4, state["y"], margin_label)
-                c.setFillColorRGB(0.08, 0.08, 0.15)
-            if idx == 0 and right_label:
-                c.setFont("Helvetica-Bold", 9)
-                c.setFillColorRGB(0.3, 0.45, 0.3)
-                c.drawRightString(right - 2, state["y"], right_label)
-                c.setFillColorRGB(0.08, 0.08, 0.15)
-            next_line()
-
-    draw_page()
-
-    # Booklet header (page 1)
-    title = data.get("title") or f"{params.get('subject') or 'Answer'} — Answer Booklet"
-    c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString((left_edge + right) / 2, state["y"], title[:80])
-    next_line()
-    sub = " · ".join([x for x in [params.get("board"), f"Class {params.get('class_level')}" if params.get("class_level") else "", params.get("subject")] if x])
-    if sub:
-        c.setFont("Helvetica", 10)
-        c.setFillColorRGB(0.35, 0.35, 0.4)
-        c.drawCentredString((left_edge + right) / 2, state["y"], sub[:100])
-        c.setFillColorRGB(0.08, 0.08, 0.15)
-        next_line()
-    c.setFont("Helvetica-Bold", 9)
-    c.setFillColorRGB(0.86, 0.32, 0.32)
-    c.drawCentredString((left_edge + right) / 2, state["y"], "— TOPPER-STYLE ANSWER SHEET —")
-    c.setFillColorRGB(0.08, 0.08, 0.15)
-    next_line(); next_line()
-
-    for ans in (data.get("answers") or []):
-        qno = str(ans.get("q_no", ""))
-        marks = ans.get("marks", "")
-        # question restatement (grey, small)
-        write(ans.get("question", ""), size=9, indent=0, color=(0.42, 0.42, 0.48),
-              margin_label=f"Q{qno}.", right_label=f"[{marks}m]" if marks != "" else None)
-        for st in (ans.get("steps") or []):
-            txt = st.get("text", "") if isinstance(st, dict) else str(st)
-            m = st.get("marks") if isinstance(st, dict) else None
-            write(txt, size=10.5, indent=6, right_label=(f"+{m}" if m else None))
-        fa = ans.get("final_answer")
-        if fa:
-            write(f"∴  {fa}", size=10.5, bold=True, indent=6)
-        tip = ans.get("examiner_tip")
-        if tip:
-            write(f"Examiner: {tip}", size=8.5, indent=6, color=(0.5, 0.42, 0.25))
-        next_line()
-
-    c.showPage(); c.save()
-    return buf.getvalue()

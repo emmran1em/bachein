@@ -109,7 +109,14 @@ export const api = {
   aiwAnswerPaper: (body: any) =>
     request('/aiw/answer-paper', { method: 'POST', body: JSON.stringify(body) }),
   aiwAnswerPapers: () => request('/aiw/answer-papers'),
+  aiwAnswerPaper1: (id: string) => request(`/aiw/answer-papers/${id}`),
   aiwAnswerPaperPdfUrl: (id: string) => `${API}/aiw/answer-papers/${id}/pdf`,
+  // ─── Question Paper v2 ───
+  qpOptions: () => request('/aiw/qp-options'),
+  aiwQpRegenerate: (id: string, body: { q_no?: string; section?: string }) =>
+    request(`/aiw/question-papers/${id}/regenerate`, { method: 'POST', body: JSON.stringify(body) }),
+  aiwQpNewSet: (id: string) =>
+    request(`/aiw/question-papers/${id}/new-set`, { method: 'POST' }),
   // ─── Downloads (Phase 6) ───
   downloads: () => request('/downloads'),
   downloadsRename: (id: string, name: string) =>
@@ -148,6 +155,8 @@ export const api = {
     request('/editor/save', { method: 'POST', body: JSON.stringify(body) }),
   editorAi: (body: { doc_type: string; current_html: string; instruction: string }) =>
     request('/editor/ai-command', { method: 'POST', body: JSON.stringify(body) }),
+  editorImport: (body: { file_base64: string; filename: string }) =>
+    request('/editor/import', { method: 'POST', body: JSON.stringify(body) }),
   editorInvite: (body: { document_id: string; email: string; permission: string }) =>
     request('/editor/invite', { method: 'POST', body: JSON.stringify(body) }),
   signedPdfUrl: (id: string) => `${API}/documents/${id}/signed-pdf`,

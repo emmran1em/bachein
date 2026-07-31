@@ -1233,6 +1233,74 @@ async def editor_get(doc_id: str, user=Depends(get_current_user)):
     return doc
 
 
+class EditorImport(BaseModel):
+    file_base64: str
+    filename: str
+
+
+@api.post("/editor/import")
+async def editor_import(req: EditorImport, user=Depends(get_current_user)):
+    """Phase 7 — import an existing document (PDF/DOCX/TXT) into editable HTML."""
+    import base64 as _b64
+    import io as _io
+    from xml.sax.saxutils import escape as _esc
+    try:
+        raw = _b64.b64decode(req.file_base64)
+    except Exception:
+        raise HTTPException(400, "Could not read the uploaded file")
+    fn = (req.filename or "").lower()
+    parts: List[str] = []
+    if fn.endswith(".docx"):
+        try:
+            from docx import Document as _Docx
+            d = _Docx(_io.BytesIO(raw))
+            for p in d.paragraphs:
+                t = (p.text or "").strip()
+                if not t:
+                    continue
+                style = (p.style.name or "").lower() if p.style else ""
+                e = _esc(t)
+                if "heading 1" in style or "title" in style:
+                    parts.append(f"<h1>{e}</h1>")
+                elif "heading 2" in style:
+                    parts.append(f"<h2>{e}</h2>")
+                elif "heading" in style:
+                    parts.append(f"<h3>{e}</h3>")
+                else:
+                    parts.append(f"<p>{e}</p>")
+            for tbl in getattr(d, "tables", [])[:10]:
+                rows_html = []
+                for row in tbl.rows[:30]:
+                    cells = "".join(f"<td style='border:1px solid #999;padding:4px'>{_esc(c.text.strip())}</td>" for c in row.cells)
+                    rows_html.append(f"<tr>{cells}</tr>")
+                parts.append(f"<table style='border-collapse:collapse'>{''.join(rows_html)}</table>")
+        except Exception as e:
+            raise HTTPException(400, f"Could not parse Word document: {e}")
+    elif fn.endswith(".pdf"):
+        try:
+            import fitz
+            pdf = fitz.open(stream=raw, filetype="pdf")
+            for pg in pdf:
+                for block in pg.get_text("blocks"):
+                    t = (block[4] or "").strip().replace("\n", " ")
+                    if t:
+                        parts.append(f"<p>{_esc(t)}</p>")
+        except Exception as e:
+            raise HTTPException(400, f"Could not parse PDF: {e}")
+    elif fn.endswith((".txt", ".md")):
+        text = raw.decode(errors="ignore")
+        for para in text.split("\n\n"):
+            t = para.strip()
+            if t:
+                parts.append(f"<p>{_esc(t).replace(chr(10), '<br/>')}</p>")
+    else:
+        raise HTTPException(400, "Unsupported file. Upload a PDF, Word (.docx) or text file.")
+    if not parts:
+        raise HTTPException(400, "No editable text found in this document (it may be a scanned copy).")
+    title = req.filename.rsplit(".", 1)[0][:80] or "Imported document"
+    return {"html": "\n".join(parts[:800]), "title": title}
+
+
 @api.post("/editor/ai-command")
 async def editor_ai(req: EditorAiRequest, user=Depends(get_current_user)):
     mode_name, system = PROFESSION_MODES.get(req.doc_type, PROFESSION_MODES["Other"])

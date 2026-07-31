@@ -29,3 +29,9 @@ def api_client():
 def shared_state():
     """Shared dict between tests for tokens/ids."""
     return {}
+
+
+@pytest.fixture(scope="module")
+def shared():
+    """Module-scoped shared dict for cross-test data (ids etc.)."""
+    return {}

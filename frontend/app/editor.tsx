@@ -4,6 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
 import { api, getToken, API_BASE } from '@/src/api';
 import { useToast } from '@/src/components/Toast';
@@ -37,6 +40,8 @@ export default function Editor() {
   const [invitePerm, setInvitePerm] = useState<'view' | 'comment' | 'edit' | 'admin'>('edit');
   const [inviteBusy, setInviteBusy] = useState(false);
   const [collabs, setCollabs] = useState<any[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [imagesOpen, setImagesOpen] = useState(false);
   const richRef = useRef<any>(null);
   const autosaveT = useRef<any>(null);
 
@@ -119,6 +124,82 @@ export default function Editor() {
     } catch (e: any) { toast.show(e.message, 'error'); }
   };
 
+  // ── Phase 7: Import an existing document into the editor ──
+  const importDoc = async () => {
+    try {
+      const r = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'],
+        copyToCacheDirectory: true,
+      });
+      if (r.canceled || !r.assets?.length) return;
+      const a = r.assets[0];
+      setImporting(true);
+      let base64 = '';
+      if (Platform.OS === 'web') {
+        const blob = await (await fetch(a.uri)).blob();
+        base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } else {
+        base64 = await FileSystem.readAsStringAsync(a.uri, { encoding: 'base64' as any });
+      }
+      const res: any = await api.editorImport({ file_base64: base64, filename: a.name || 'document.pdf' });
+      setTitle(res.title);
+      setHtml(res.html);
+      setDocType('Other');
+      setStep('editor');
+      setTimeout(() => richRef.current?.setContentHTML?.(res.html), 400);
+      toast.show('Document imported — edit away ✓', 'success');
+    } catch (e: any) { toast.show(e.message || 'Import failed', 'error'); }
+    finally { setImporting(false); }
+  };
+
+  // ── Phase 7: numbered image positions ──
+  const countPositions = (h: string) => {
+    const m = h.match(/\[\s*Image Position \d+\s*\]/gi);
+    return m ? m.length : 0;
+  };
+
+  const insertPosition = () => {
+    const n = countPositions(html) + 1;
+    richRef.current?.insertHTML?.(
+      `<p style="color:#8a8a8a;border:1px dashed #bbb;border-radius:8px;padding:8px;text-align:center">[Image Position ${n}]</p>`
+    );
+    toast.show(`Placeholder "Image Position ${n}" inserted`, 'success');
+  };
+
+  const autoInsertImages = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted && !perm.canAskAgain) { toast.show('Photo access needed — enable it in Settings', 'error'); return; }
+      const r = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'], allowsMultipleSelection: true, base64: true, quality: 0.5, selectionLimit: 10,
+      });
+      if (r.canceled || !r.assets?.length) return;
+      let newHtml = html;
+      let placed = 0;
+      r.assets.forEach((a, i) => {
+        if (!a.base64) return;
+        const imgTag = `<img src="data:image/jpeg;base64,${a.base64}" style="max-width:100%;border-radius:8px" />`;
+        const marker = new RegExp(`\\[\\s*Image Position ${i + 1}\\s*\\]`, 'i');
+        if (marker.test(newHtml)) {
+          newHtml = newHtml.replace(marker, imgTag);
+          placed++;
+        } else {
+          newHtml += `<p>${imgTag}</p>`;
+        }
+      });
+      setHtml(newHtml);
+      richRef.current?.setContentHTML?.(newHtml);
+      scheduleAutosave();
+      setImagesOpen(false);
+      toast.show(placed > 0 ? `${placed} image${placed > 1 ? 's' : ''} placed at their positions ✓` : `${r.assets.length} image(s) added at the end ✓`, 'success');
+    } catch (e: any) { toast.show(e.message || 'Image insert failed', 'error'); }
+  };
+
   if (step === 'picker') {
     return (
       <SafeAreaView style={s.container} edges={['top']} testID="editor-picker">
@@ -154,6 +235,10 @@ export default function Editor() {
             <Ionicons name="create-outline" size={16} color={theme.colors.onBrandPrimary} />
             <Text style={s.primaryBtnText}>Open Editor</Text>
           </Pressable>
+          <Pressable testID="import-doc-btn" style={[s.importBtn, importing && { opacity: 0.6 }]} disabled={importing} onPress={importDoc}>
+            {importing ? <ActivityIndicator size="small" color={theme.colors.brand} /> : <Ionicons name="cloud-upload-outline" size={16} color={theme.colors.brand} />}
+            <Text style={s.importBtnText}>{importing ? 'Importing…' : 'Or edit an existing document (PDF / Word / Text)'}</Text>
+          </Pressable>
         </ScrollView>
       </SafeAreaView>
     );
@@ -176,6 +261,9 @@ export default function Editor() {
             {docType}{aiMode ? ` · ${aiMode}` : ''}{savedAt ? ` · saved ${savedAt}` : ''}{saving ? ' · saving…' : ''}
           </Text>
         </View>
+        <Pressable testID="images-btn" onPress={() => setImagesOpen(true)} style={s.headBtn}>
+          <Ionicons name="image-outline" size={16} color={theme.colors.brand} />
+        </Pressable>
         <Pressable testID="invite-btn" onPress={() => setInviteOpen(true)} style={s.headBtn}>
           <Ionicons name="person-add-outline" size={16} color={theme.colors.brand} />
           <Text style={s.headBtnText}>{collabs.length > 0 ? `${collabs.length}` : 'Invite'}</Text>
@@ -245,6 +333,32 @@ export default function Editor() {
         )}
       </KeyboardAvoidingView>
 
+      <Modal visible={imagesOpen} transparent animationType="fade" onRequestClose={() => setImagesOpen(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.inviteSheet}>
+            <Text style={s.inviteTitle}>Images</Text>
+            <Text style={s.inviteSub}>Mark spots in your document with numbered placeholders, then upload images — each image is auto-inserted at its matching position.</Text>
+            <Pressable testID="insert-position-btn" style={s.imgAction} onPress={() => { insertPosition(); setImagesOpen(false); }}>
+              <Ionicons name="locate-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Insert image position</Text>
+                <Text style={s.imgActionSub}>Adds “[Image Position {countPositions(html) + 1}]” at the cursor</Text>
+              </View>
+            </Pressable>
+            <Pressable testID="auto-insert-images-btn" style={s.imgAction} onPress={autoInsertImages}>
+              <Ionicons name="images-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Upload & auto-insert images</Text>
+                <Text style={s.imgActionSub}>Image 1 → Position 1, Image 2 → Position 2, …</Text>
+              </View>
+            </Pressable>
+            <Pressable testID="close-images" style={[s.cancelBtn, { marginTop: 14 }]} onPress={() => setImagesOpen(false)}>
+              <Text style={s.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
         <View style={s.modalOverlay}>
           <View style={s.inviteSheet}>
@@ -308,6 +422,11 @@ const s = StyleSheet.create({
   input: { backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 12, padding: 14, fontSize: 15, color: theme.colors.brand },
   primaryBtn: { flexDirection: 'row', gap: 8, marginTop: 24, backgroundColor: theme.colors.brand, padding: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   primaryBtnText: { color: theme.colors.onBrandPrimary, fontWeight: '500' },
+  importBtn: { flexDirection: 'row', gap: 8, marginTop: 12, padding: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderStyle: 'dashed', borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.card },
+  importBtnText: { color: theme.colors.brand, fontWeight: '500', fontSize: 13 },
+  imgAction: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider },
+  imgActionTitle: { color: theme.colors.brand, fontSize: 14, fontWeight: '500' },
+  imgActionSub: { color: theme.colors.muted, fontSize: 11, marginTop: 2 },
   editorHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.border, backgroundColor: theme.colors.card },
   titleInline: { color: theme.colors.brand, fontSize: 15, fontWeight: '500', paddingVertical: 4 },
   modeLine: { color: theme.colors.muted, fontSize: 10 },
