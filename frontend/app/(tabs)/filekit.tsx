@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Platform, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -25,6 +25,7 @@ export default function FileKit() {
   const [showTargetMenu, setShowTargetMenu] = useState(false);
   const [quality, setQuality] = useState(25);
   const [showMenu, setShowMenu] = useState(false);
+  const [password, setPassword] = useState('');
   const [downloads, setDownloads] = useState<DlItem[]>([]);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function FileKit() {
   const pick = async (tool: Tool) => {
     setErr(''); setResult(null); setPicked(null);
     setDetected('');
-    const types = tool === 'image-compress' ? ['image/*'] : tool === 'pdf-compress' ? ['application/pdf'] : ['*/*'];
+    const types = tool === 'image-compress' ? ['image/*'] : (tool === 'pdf-compress' || tool === 'protect' || tool === 'unlock') ? ['application/pdf'] : ['*/*'];
     try {
       const res = await DocumentPicker.getDocumentAsync({ type: types, copyToCacheDirectory: true });
       if (res.canceled) return;
@@ -85,6 +86,9 @@ export default function FileKit() {
         out = await fileToolUpload('/file-tools/compress-image', picked, { quality: String(quality) });
       } else if (tool === 'pdf-compress') {
         out = await fileToolUpload('/file-tools/compress-pdf', picked, {});
+      } else if (tool === 'protect' || tool === 'unlock') {
+        if (!password.trim()) { setErr('Enter a password first'); setBusy(false); return; }
+        out = await fileToolUpload(`/file-tools/${tool}`, picked, { password: password.trim() });
       } else {
         out = await fileToolUpload('/file-tools/convert', picked, { target });
       }
@@ -180,6 +184,22 @@ export default function FileKit() {
             </View>
             <Ionicons name="chevron-forward" size={18} color={theme.colors.muted} />
           </Pressable>
+          <Pressable testID="tool-protect" style={s.toolCard} onPress={() => { setPassword(''); setTool('protect'); }}>
+            <View style={[s.iconBox, { backgroundColor: '#E8ECF7' }]}><Ionicons name="lock-closed" size={22} color="#3b5bdb" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.toolTitle}>Protect Document</Text>
+              <Text style={s.toolDesc}>Password-protect any PDF (AES-256)</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={theme.colors.muted} />
+          </Pressable>
+          <Pressable testID="tool-unlock" style={s.toolCard} onPress={() => { setPassword(''); setTool('unlock'); }}>
+            <View style={[s.iconBox, { backgroundColor: '#FFF4E0' }]}><Ionicons name="lock-open" size={22} color="#d97706" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.toolTitle}>Unlock Document</Text>
+              <Text style={s.toolDesc}>Remove a PDF password (with the password)</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={theme.colors.muted} />
+          </Pressable>
         </ScrollView>
 
         <Modal visible={showMenu} transparent animationType="fade" onRequestClose={closeMenu}>
@@ -241,6 +261,8 @@ export default function FileKit() {
     'image-compress': 'Image Compressor',
     'pdf-compress': 'PDF Compressor',
     'convert': 'Document Converter',
+    'protect': 'Protect Document',
+    'unlock': 'Unlock Document',
   };
 
   return (
@@ -257,6 +279,20 @@ export default function FileKit() {
           <Text style={s.dropTitle}>{picked ? picked.name : 'Tap to choose a file'}</Text>
           {!picked && <Text style={s.dropSub}>Any size · any type</Text>}
         </Pressable>
+        {(tool === 'protect' || tool === 'unlock') && (
+          <View style={{ marginTop: 14 }}>
+            <Text style={s.dropSub}>{tool === 'protect' ? 'SET A PASSWORD (AES-256)' : 'ENTER THE PDF PASSWORD'}</Text>
+            <TextInput
+              testID="pdf-password-input"
+              style={{ marginTop: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: theme.colors.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, color: theme.colors.brand, fontSize: 14 }}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="Password"
+              placeholderTextColor={theme.colors.muted}
+            />
+          </View>
+        )}
 
         {tool === 'image-compress' && picked && (
           <View style={{ marginTop: 20 }}>

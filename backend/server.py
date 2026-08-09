@@ -1126,9 +1126,60 @@ async def doc_status(doc_id: str, user=Depends(get_current_user)):
         "audit_log": doc.get("audit_log", []),
     }
 
+def _draw_signature_on_page(page, sig_json: str, label: str, who: str, when: str, x: float, y: float):
+    """Render a stored signature ({mode, paths|text|image_b64}) into a box on a fitz page."""
+    import json as _json
+    import base64 as _b64
+    import re as _re
+    import fitz as _fitz
+    BOX_W, BOX_H = 220, 80
+    page.draw_rect(_fitz.Rect(x, y, x + BOX_W, y + BOX_H), color=(0.6, 0.6, 0.65), width=0.7)
+    page.insert_text((x, y - 6), label, fontsize=9, fontname="helv", color=(0.2, 0.2, 0.3))
+    page.insert_text((x, y + BOX_H + 12), who[:40], fontsize=8, color=(0.35, 0.35, 0.4))
+    page.insert_text((x, y + BOX_H + 23), (when or "")[:19].replace("T", " "), fontsize=7.5, color=(0.5, 0.5, 0.55))
+    try:
+        sig = _json.loads(sig_json) if isinstance(sig_json, str) else (sig_json or {})
+    except Exception:
+        sig = {}
+    mode = sig.get("mode")
+    try:
+        if mode == "draw" and sig.get("paths"):
+            pts_all = []
+            strokes = []
+            for p in sig["paths"]:
+                pts = [(float(a), float(b)) for a, b in _re.findall(r"[ML]?\s*(-?[\d.]+),(-?[\d.]+)", p)]
+                if pts:
+                    strokes.append(pts)
+                    pts_all.extend(pts)
+            if pts_all:
+                xs = [p[0] for p in pts_all]; ys = [p[1] for p in pts_all]
+                minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+                sw = max(1.0, maxx - minx); sh = max(1.0, maxy - miny)
+                scale = min((BOX_W - 16) / sw, (BOX_H - 16) / sh)
+                ox = x + 8 + ((BOX_W - 16) - sw * scale) / 2
+                oy = y + 8 + ((BOX_H - 16) - sh * scale) / 2
+                for pts in strokes:
+                    for i in range(len(pts) - 1):
+                        p1 = (ox + (pts[i][0] - minx) * scale, oy + (pts[i][1] - miny) * scale)
+                        p2 = (ox + (pts[i + 1][0] - minx) * scale, oy + (pts[i + 1][1] - miny) * scale)
+                        page.draw_line(p1, p2, color=(0.1, 0.12, 0.35), width=1.4)
+        elif mode == "type" and sig.get("text"):
+            page.insert_text((x + 14, y + BOX_H / 2 + 8), sig["text"][:30], fontsize=20, fontname="tiit", color=(0.1, 0.12, 0.35))
+        elif mode == "upload" and sig.get("image_b64"):
+            raw = sig["image_b64"]
+            if "," in raw[:80]:
+                raw = raw.split(",", 1)[1]
+            img = _b64.b64decode(raw)
+            page.insert_image(_fitz.Rect(x + 6, y + 6, x + BOX_W - 6, y + BOX_H - 6), stream=img, keep_proportion=True)
+        else:
+            page.insert_text((x + 14, y + BOX_H / 2 + 4), "(signed digitally)", fontsize=10, color=(0.4, 0.4, 0.45))
+    except Exception:
+        page.insert_text((x + 14, y + BOX_H / 2 + 4), "(signed digitally)", fontsize=10, color=(0.4, 0.4, 0.45))
+
+
 @api.get("/documents/{doc_id}/signed-pdf")
 async def get_signed_pdf(doc_id: str, user=Depends(get_user_from_query_or_header)):
-    """Sender or receiver can download the signed-doc PDF (text body + watermark)."""
+    """Sender or receiver downloads the signed PDF — with BOTH signatures embedded."""
     doc = await db.documents.find_one({"id": doc_id})
     if not doc:
         raise HTTPException(404, "Not found")
@@ -1138,6 +1189,31 @@ async def get_signed_pdf(doc_id: str, user=Depends(get_user_from_query_or_header
         raise HTTPException(400, "Document not yet signed")
     wm = f"signed by {doc.get('recipient_email','')} • {doc.get('signed_at','')[:19]}"
     pdf = text_to_pdf(doc["title"], doc.get("content", ""), watermark=wm)
+
+    # ── Embed signature blocks on the last page (or a new page if no room) ──
+    try:
+        import fitz as _fitz
+        pdoc = _fitz.open(stream=pdf, filetype="pdf")
+        page = pdoc[-1]
+        need_h = 150
+        # find lowest text on the page to know free space
+        blocks = page.get_text("blocks")
+        lowest = max((b[3] for b in blocks), default=0)
+        if page.rect.height - lowest < need_h + 40:
+            page = pdoc.new_page(width=page.rect.width, height=page.rect.height)
+            lowest = 60
+        y0 = lowest + 46
+        page.insert_text((50, y0 - 22), "SIGNATURES", fontsize=11, fontname="hebo", color=(0.15, 0.15, 0.25))
+        page.draw_line((50, y0 - 16), (page.rect.width - 50, y0 - 16), color=(0.7, 0.7, 0.75), width=0.7)
+        sender = await db.users.find_one({"id": doc["sender_id"]}, {"_id": 0, "email": 1, "name": 1})
+        _draw_signature_on_page(page, doc.get("sender_signature") or "", "Sender",
+                                (sender or {}).get("email", "Sender"), doc.get("sender_signed_at") or doc.get("created_at", ""), 50, y0)
+        _draw_signature_on_page(page, doc.get("receiver_signature") or doc.get("signature_base64") or "", "Receiver",
+                                doc.get("recipient_email", "Receiver"), doc.get("signed_at", ""), page.rect.width - 50 - 220, y0)
+        pdf = pdoc.tobytes()
+    except Exception as e:
+        logging.warning(f"signature embed failed: {e}")
+
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="signed-{doc["title"][:40]}.pdf"'
     })
@@ -1286,8 +1362,23 @@ async def editor_import(req: EditorImport, user=Depends(get_current_user)):
                     t = (block[4] or "").strip().replace("\n", " ")
                     if t:
                         parts.append(f"<p>{_esc(t)}</p>")
+            if not parts and len(pdf) > 0:
+                # Scanned PDF — OCR fallback
+                from ocr_service import ocr_images_to_html, pdf_to_page_images
+                result = await ocr_images_to_html(pdf_to_page_images(raw), req.filename)
+                if result.get("html"):
+                    parts.append(result["html"])
         except Exception as e:
             raise HTTPException(400, f"Could not parse PDF: {e}")
+    elif fn.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        # Photo of a document — OCR
+        try:
+            from ocr_service import ocr_images_to_html
+            result = await ocr_images_to_html([req.file_base64], req.filename)
+            if result.get("html"):
+                parts.append(result["html"])
+        except Exception as e:
+            raise HTTPException(400, f"OCR failed: {e}")
     elif fn.endswith((".txt", ".md")):
         text = raw.decode(errors="ignore")
         for para in text.split("\n\n"):
@@ -1321,6 +1412,32 @@ async def editor_ai(req: EditorAiRequest, user=Depends(get_current_user)):
         t = t.split("\n", 1)[1] if "\n" in t else t
         if t.endswith("```"): t = t[:-3]
     return {"html": t.strip(), "mode": mode_name}
+
+
+class EditorSuggestRequest(BaseModel):
+    doc_type: str
+    current_html: str
+
+
+@api.post("/editor/suggest")
+async def editor_suggest(req: EditorSuggestRequest, user=Depends(get_current_user)):
+    """Shadow AI suggestion — VS-Code-style ghost continuation of the document."""
+    import re as _re
+    plain = _re.sub(r"<[^>]+>", " ", req.current_html or "")
+    plain = _re.sub(r"\s+", " ", plain).strip()[-2600:]
+    if len(plain) < 20:
+        return {"suggestion": ""}
+    mode_name, system = PROFESSION_MODES.get(req.doc_type, PROFESSION_MODES["Other"])
+    prompt = (
+        "The user paused while writing the document below. Suggest the natural NEXT sentence(s) "
+        "that continue their writing (max 28 words), matching their tone and topic exactly. "
+        "Return ONLY the continuation text — no quotes, no explanation.\n\n" + plain
+    )
+    try:
+        text = await gemini_chat(system, prompt, session_id=f"suggest-{user['id']}")
+    except Exception:
+        return {"suggestion": ""}
+    return {"suggestion": (text or "").strip().strip('"')[:240], "mode": mode_name}
 
 
 @api.post("/editor/export-pdf")
@@ -1422,6 +1539,7 @@ async def editor_versions(doc_id: str, user=Depends(get_current_user)):
 class ScanProcessRequest(BaseModel):
     image_base64: str
     mode: str = "color"  # color | bw
+    rotate: int = 0      # 90/180/270 — rotate-only operation (skips detection)
 
 
 @api.post("/scanner/process")
@@ -1437,6 +1555,12 @@ async def scanner_process(req: ScanProcessRequest, user=Depends(get_current_user
             raise ValueError("bad image")
     except Exception:
         raise HTTPException(400, "Could not read image")
+
+    if req.rotate in (90, 180, 270):
+        rot_map = {90: _cv2.ROTATE_90_CLOCKWISE, 180: _cv2.ROTATE_180, 270: _cv2.ROTATE_90_COUNTERCLOCKWISE}
+        img = _cv2.rotate(img, rot_map[req.rotate])
+        ok, enc = _cv2.imencode(".jpg", img, [_cv2.IMWRITE_JPEG_QUALITY, 85])
+        return {"image_base64": _b64.b64encode(enc.tobytes()).decode(), "found_document": True}
 
     found = False
     out = img
@@ -1613,6 +1737,91 @@ async def file_compress_pdf(file: UploadFile = File(...), user=Depends(get_curre
         "X-Original-Size": str(len(data)),
         "X-Compressed-Size": str(len(out_bytes)),
     })
+
+@api.post("/file-tools/protect")
+async def file_protect_pdf(file: UploadFile = File(...), password: str = Form(...), user=Depends(get_current_user)):
+    """Phase 10 — password-protect a PDF (AES-256)."""
+    data = await file.read()
+    import fitz
+    try:
+        pdf = fitz.open(stream=data, filetype="pdf")
+        out = pdf.tobytes(encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=password, owner_pw=password)
+    except Exception as e:
+        raise HTTPException(400, f"Could not protect PDF: {e}")
+    return Response(content=out, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="protected-{(file.filename or "doc").rsplit(".",1)[0]}.pdf"',
+    })
+
+
+@api.post("/file-tools/unlock")
+async def file_unlock_pdf(file: UploadFile = File(...), password: str = Form(...), user=Depends(get_current_user)):
+    """Phase 10 — remove password from a PDF (requires the correct password)."""
+    data = await file.read()
+    import fitz
+    try:
+        pdf = fitz.open(stream=data, filetype="pdf")
+        if pdf.needs_pass:
+            if not pdf.authenticate(password):
+                raise HTTPException(400, "Wrong password")
+        out = pdf.tobytes(encryption=fitz.PDF_ENCRYPT_NONE)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Could not unlock PDF: {e}")
+    return Response(content=out, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="unlocked-{(file.filename or "doc").rsplit(".",1)[0]}.pdf"',
+    })
+
+
+# ══════════════ OCR — modular document understanding ══════════════
+class OcrRequest(BaseModel):
+    file_base64: str
+    filename: str
+
+
+@api.post("/ocr/extract")
+async def ocr_extract(req: OcrRequest, user=Depends(get_current_user)):
+    """Professional OCR: PDF/scan/image → structured HTML with uncertainty flags."""
+    import base64 as _b64
+    from ocr_service import ocr_images_to_html, pdf_to_page_images
+    try:
+        raw = _b64.b64decode(req.file_base64)
+    except Exception:
+        raise HTTPException(400, "Could not read the uploaded file")
+    fn = (req.filename or "").lower()
+    if fn.endswith(".pdf"):
+        # If PDF has a text layer, still OCR via images? Use text layer directly when rich.
+        try:
+            import fitz
+            pdf = fitz.open(stream=raw, filetype="pdf")
+            text = "\n".join(p.get_text() for p in pdf)
+            if len(text.strip()) > 200:
+                html = "".join(f"<p>{ln.strip()}</p>" for ln in text.split("\n") if ln.strip())[:120000]
+                return {"html": html, "text": text[:60000], "warnings": 0, "engine": "text-layer", "pages": len(pdf)}
+        except Exception:
+            pass
+        images = pdf_to_page_images(raw)
+        if not images:
+            raise HTTPException(400, "Empty PDF")
+    elif fn.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        images = [req.file_base64]
+    elif fn.endswith((".docx",)):
+        # DOCX has text — no OCR needed
+        import io as _io
+        from docx import Document as _Docx
+        d = _Docx(_io.BytesIO(raw))
+        text = "\n".join(p.text for p in d.paragraphs if p.text.strip())
+        html = "".join(f"<p>{ln}</p>" for ln in text.split("\n"))
+        return {"html": html, "text": text[:60000], "warnings": 0, "engine": "docx-text", "pages": 1}
+    else:
+        raise HTTPException(400, "Upload a PDF, image or Word document")
+    try:
+        result = await ocr_images_to_html(images, req.filename)
+    except Exception as e:
+        raise HTTPException(500, f"OCR engine error: {e}")
+    result["pages"] = len(images)
+    return result
+
 
 # Include
 app.include_router(api)

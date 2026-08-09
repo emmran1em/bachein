@@ -32,10 +32,25 @@ export default function CreateMode() {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) { toast.show('Camera permission required', 'error'); return; }
-      const res = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false });
+      const res = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: false, base64: true });
       if (res.canceled) return;
       const a = res.assets[0];
-      setCaptured((c) => [...c, { name: `capture-${Date.now()}.jpg`, uri: a.uri, mime: 'image/jpeg' }]);
+      let uri = a.uri;
+      // Scanner pipeline: edge detection + perspective correction + enhancement
+      if (a.base64) {
+        try {
+          const p: any = await api.scannerProcess(a.base64, 'color');
+          if (Platform.OS === 'web') {
+            uri = `data:image/jpeg;base64,${p.image_base64}`;
+          } else {
+            const dest = `${FileSystem.cacheDirectory}scan-${Date.now()}.jpg`;
+            await FileSystem.writeAsStringAsync(dest, p.image_base64, { encoding: 'base64' as any });
+            uri = dest;
+          }
+          toast.show(p.found_document ? 'Document detected & straightened ✓' : 'Captured ✓', 'success');
+        } catch {}
+      }
+      setCaptured((c) => [...c, { name: `scan-${Date.now()}.jpg`, uri, mime: 'image/jpeg' }]);
     } catch (e: any) { toast.show(e.message, 'error'); }
   };
 

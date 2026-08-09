@@ -8,6 +8,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
+import AskBachein from '@/src/components/AskBachein';
 import { api, getToken, API_BASE } from '@/src/api';
 import { useToast } from '@/src/components/Toast';
 import { playSent } from '@/src/lib/sound';
@@ -24,7 +25,7 @@ type Step = 'picker' | 'editor';
 export default function Editor() {
   const router = useRouter();
   const toast = useToast();
-  const { id: idParam } = useLocalSearchParams<{ id?: string }>();
+  const { id: idParam, import: importParam } = useLocalSearchParams<{ id?: string; import?: string }>();
   const [step, setStep] = useState<Step>(idParam ? 'editor' : 'picker');
   const [docType, setDocType] = useState<string>('Novel');
   const [title, setTitle] = useState('Untitled document');
@@ -48,6 +49,15 @@ export default function Editor() {
   const [replaceText, setReplaceText] = useState('');
   const [pageSetupOpen, setPageSetupOpen] = useState(false);
   const [pageSetup, setPageSetup] = useState<{ margins: string; header: string; footer: string; page_numbers: boolean }>({ margins: 'normal', header: '', footer: '', page_numbers: true });
+  const [fontOpen, setFontOpen] = useState(false);
+  const [fontQuery, setFontQuery] = useState('');
+  const [customSize, setCustomSize] = useState('');
+  const [imgSize, setImgSize] = useState<40 | 70 | 100>(70);
+  const [shadowOn, setShadowOn] = useState(false);
+  const [suggestion, setSuggestion] = useState('');
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const suggestTimer = useRef<any>(null);
+  const [askOpen, setAskOpen] = useState(false);
   const richRef = useRef<any>(null);
   const autosaveT = useRef<any>(null);
 
@@ -161,9 +171,55 @@ export default function Editor() {
     toast.show(`Replaced ${count} occurrence${count > 1 ? 's' : ''} ✓`, 'success');
   };
 
-  const applyFontSize = (n: number) => {
-    richRef.current?.setFontSize?.(n as any);
+  const applyFontSize = (px: number) => {
+    if (!px || px < 6 || px > 96) { toast.show('Enter a size between 6 and 96', 'error'); return; }
+    const js = `(function(){document.execCommand('fontSize',false,'7');var els=document.querySelectorAll('font[size="7"]');for(var i=0;i<els.length;i++){els[i].removeAttribute('size');els[i].style.fontSize='${px}px';}})();`;
+    richRef.current?.commandDOM?.(js);
     setToolsOpen(false);
+    toast.show(`Font size ${px}px — select text and re-apply anytime ✓`, 'success');
+  };
+
+  const applyFont = (name: string) => {
+    richRef.current?.commandDOM?.(`document.execCommand('fontName',false,'${name.replace(/'/g, "\\'")}');`);
+    setFontOpen(false);
+    toast.show(`${name} applied to selection ✓`, 'success');
+  };
+
+  const applyMargins = (m: string) => {
+    const pad = m === 'narrow' ? '24px 22px' : m === 'wide' ? '72px 64px' : '48px 44px';
+    richRef.current?.commandDOM?.(`document.body.style.padding='${pad}';`);
+  };
+
+  // Edit Assignment entry — auto-open the import picker
+  const importTriggered = useRef(false);
+  useEffect(() => {
+    if (importParam === '1' && !importTriggered.current) {
+      importTriggered.current = true;
+      setTimeout(() => importDoc(), 400);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importParam]);
+
+  // ── Shadow AI suggestions (ghost text after a writing pause) ──
+  useEffect(() => {
+    if (!shadowOn) { setSuggestion(''); return; }
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(async () => {
+      if (html.replace(/<[^>]+>/g, '').trim().length < 20) return;
+      setSuggestBusy(true);
+      try {
+        const r: any = await api.editorSuggest({ doc_type: docType, current_html: html });
+        setSuggestion(r.suggestion || '');
+      } catch {}
+      setSuggestBusy(false);
+    }, 30000);
+    return () => { if (suggestTimer.current) clearTimeout(suggestTimer.current); };
+  }, [html, shadowOn, docType]);
+
+  const acceptSuggestion = () => {
+    if (!suggestion) return;
+    richRef.current?.insertHTML?.(` ${suggestion}`);
+    setSuggestion('');
   };
 
   const proofread = async () => {
@@ -227,7 +283,7 @@ export default function Editor() {
   const insertPosition = () => {
     const n = countPositions(html) + 1;
     richRef.current?.insertHTML?.(
-      `<p style="color:#8a8a8a;border:1px dashed #bbb;border-radius:8px;padding:8px;text-align:center">[Image Position ${n}]</p>`
+      `<div style="border:1.5px dashed #9aa4b2;border-radius:10px;padding:18px 10px;text-align:center;color:#8a94a3;margin:10px 0">[Image Position ${n}]</div>`
     );
     toast.show(`Placeholder "Image Position ${n}" inserted`, 'success');
   };
@@ -244,13 +300,14 @@ export default function Editor() {
       let placed = 0;
       r.assets.forEach((a, i) => {
         if (!a.base64) return;
-        const imgTag = `<img src="data:image/jpeg;base64,${a.base64}" style="max-width:100%;border-radius:8px" />`;
+        const imgTag = `<img src="data:image/jpeg;base64,${a.base64}" style="width:${imgSize}%;border-radius:8px;display:inline-block" />`;
+        const framed = `<div style="border:1.5px dashed #9aa4b2;border-radius:10px;padding:6px;text-align:center;margin:10px 0">${imgTag}</div>`;
         const marker = new RegExp(`\\[\\s*Image Position ${i + 1}\\s*\\]`, 'i');
         if (marker.test(newHtml)) {
           newHtml = newHtml.replace(marker, imgTag);
           placed++;
         } else {
-          newHtml += `<p>${imgTag}</p>`;
+          newHtml += framed;
         }
       });
       setHtml(newHtml);
@@ -308,7 +365,7 @@ export default function Editor() {
   return (
     <SafeAreaView style={s.container} edges={['top']} testID="editor-screen">
       <View style={s.editorHead}>
-        <Pressable testID="editor-back" onPress={() => router.back()} style={s.closeBtn}>
+        <Pressable testID="editor-back" onPress={async () => { try { await save(true); } catch {} router.back(); }} style={s.closeBtn}>
           <Ionicons name="chevron-back" size={22} color={theme.colors.brand} />
         </Pressable>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -354,6 +411,28 @@ export default function Editor() {
           </Pressable>
         </View>
 
+        {/* Shadow AI ghost suggestion */}
+        {shadowOn && (suggestion || suggestBusy) && (
+          <View style={s.suggestBar} testID="shadow-suggestion-bar">
+            <Ionicons name="flash" size={13} color="#16a34a" />
+            {suggestBusy && !suggestion ? (
+              <Text style={s.suggestText}>thinking…</Text>
+            ) : (
+              <Text style={s.suggestText} numberOfLines={2}>{suggestion}</Text>
+            )}
+            {!!suggestion && (
+              <>
+                <Pressable testID="suggest-accept" style={s.suggestBtn} onPress={acceptSuggestion}>
+                  <Text style={s.suggestBtnText}>Insert</Text>
+                </Pressable>
+                <Pressable testID="suggest-dismiss" onPress={() => setSuggestion('')}>
+                  <Ionicons name="close" size={15} color={theme.colors.muted} />
+                </Pressable>
+              </>
+            )}
+          </View>
+        )}
+
         {/* Rich toolbar */}
         <RichToolbar
           editor={richRef}
@@ -377,6 +456,9 @@ export default function Editor() {
           }}
         />
 
+        {!!pageSetup.header && (
+          <View style={s.hfStrip}><Ionicons name="remove-outline" size={12} color={theme.colors.muted} /><Text style={s.hfText}>{pageSetup.header}</Text></View>
+        )}
         <RichEditor
           ref={richRef}
           initialContentHTML={html}
@@ -384,12 +466,25 @@ export default function Editor() {
           onChange={(v) => { setHtml(v); scheduleAutosave(); }}
           style={s.editor}
           editorStyle={{
-            backgroundColor: '#fff',
+            backgroundColor: '#e9ebee',
             color: '#22201C',
-            contentCSSText: 'font-family: -apple-system, Segoe UI, Roboto, sans-serif; font-size: 15px; line-height: 1.5; padding: 20px;',
+            contentCSSText:
+              'font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.65;' +
+              'background:#ffffff;max-width:794px;margin:14px auto;padding:48px 44px;min-height:1123px;' +
+              'box-shadow:0 2px 16px rgba(0,0,0,0.14);border-radius:2px;' +
+              'background-image:repeating-linear-gradient(to bottom, transparent 0px, transparent 1121px, #c9d1dc 1121px, #c9d1dc 1123px);',
           }}
-          initialHeight={480}
+          initialHeight={520}
         />
+        {!!pageSetup.footer && (
+          <View style={s.hfStrip}><Text style={s.hfText}>{pageSetup.footer}</Text></View>
+        )}
+
+        {/* Ask Bachein floating bubble */}
+        <Pressable testID="ask-bachein-bubble" style={s.askBubble} onPress={() => setAskOpen(true)}>
+          <Ionicons name="chatbubble-ellipses" size={20} color="#fff" />
+        </Pressable>
+        <AskBachein visible={askOpen} onClose={() => setAskOpen(false)} context={html.replace(/<[^>]+>/g, ' ').slice(0, 4000)} />
 
         {collabs.length > 0 && (
           <View style={s.collabRow}>
@@ -424,20 +519,79 @@ export default function Editor() {
                 <Text style={s.imgActionSub}>AI proofreads and fixes every mistake</Text>
               </View>
             </Pressable>
+            <Pressable testID="tool-font-style" style={s.imgAction} onPress={() => { setToolsOpen(false); setFontQuery(''); setFontOpen(true); }}>
+              <Ionicons name="text" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Font style</Text>
+                <Text style={s.imgActionSub}>Times New Roman, Calibri, Roboto & more</Text>
+              </View>
+            </Pressable>
+            <Pressable testID="tool-shadow-ai" style={s.imgAction} onPress={() => setShadowOn((v) => !v)}>
+              <Ionicons name={shadowOn ? 'flash' : 'flash-outline'} size={18} color={shadowOn ? '#16a34a' : theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Shadow AI suggestions — {shadowOn ? 'On' : 'Off'}</Text>
+                <Text style={s.imgActionSub}>Ghost-text continuation when you pause writing</Text>
+              </View>
+              <Ionicons name={shadowOn ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={shadowOn ? '#16a34a' : theme.colors.muted} />
+            </Pressable>
             <View style={[s.imgAction, { borderBottomWidth: 0 }]}>
               <Ionicons name="text-outline" size={18} color={theme.colors.brand} />
               <View style={{ flex: 1 }}>
                 <Text style={s.imgActionTitle}>Font size (selection)</Text>
-                <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
-                  {[['S', 2], ['M', 3], ['L', 5], ['XL', 7]].map(([lbl, v]) => (
-                    <Pressable key={String(lbl)} testID={`font-size-${lbl}`} style={s.fontChip} onPress={() => applyFontSize(Number(v))}>
-                      <Text style={s.fontChipText}>{lbl}</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                  {[12, 14, 16, 18, 24, 32].map((v) => (
+                    <Pressable key={v} testID={`font-size-${v}`} style={s.fontChip} onPress={() => applyFontSize(v)}>
+                      <Text style={s.fontChipText}>{v}</Text>
                     </Pressable>
                   ))}
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <TextInput
+                    testID="font-size-custom"
+                    style={s.sizeInput}
+                    value={customSize}
+                    onChangeText={setCustomSize}
+                    keyboardType="number-pad"
+                    placeholder="Type size…"
+                    placeholderTextColor={theme.colors.muted}
+                  />
+                  <Pressable testID="font-size-apply" style={s.sizeApply} onPress={() => applyFontSize(parseInt(customSize, 10) || 0)}>
+                    <Text style={{ color: '#fff', fontWeight: '600', fontSize: 12 }}>Apply</Text>
+                  </Pressable>
                 </View>
               </View>
             </View>
             <Pressable testID="close-tools" style={[s.cancelBtn, { marginTop: 14 }]} onPress={() => setToolsOpen(false)}>
+              <Text style={s.cancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Font style picker */}
+      <Modal visible={fontOpen} transparent animationType="fade" onRequestClose={() => setFontOpen(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.inviteSheet}>
+            <Text style={s.inviteTitle}>Font style</Text>
+            <TextInput
+              testID="font-search"
+              style={s.input}
+              value={fontQuery}
+              onChangeText={setFontQuery}
+              placeholder="Search fonts…"
+              placeholderTextColor={theme.colors.muted}
+            />
+            <ScrollView style={{ maxHeight: 300, marginTop: 8 }}>
+              {['Times New Roman', 'Georgia', 'Garamond', 'Arial', 'Calibri', 'Helvetica', 'Verdana', 'Roboto', 'Tahoma', 'Trebuchet MS', 'Courier New', 'Book Antiqua', 'Palatino', 'Comic Sans MS', 'Impact']
+                .filter((f) => f.toLowerCase().includes(fontQuery.toLowerCase()))
+                .map((f) => (
+                  <Pressable key={f} testID={`font-${f.replace(/ /g, '-')}`} style={s.fontRow} onPress={() => applyFont(f)}>
+                    <Text style={{ color: theme.colors.brand, fontSize: 15, fontFamily: Platform.OS === 'web' ? f : undefined }}>{f}</Text>
+                    <Ionicons name="chevron-forward" size={14} color={theme.colors.muted} />
+                  </Pressable>
+                ))}
+            </ScrollView>
+            <Pressable style={[s.cancelBtn, { marginTop: 12 }]} onPress={() => setFontOpen(false)}>
               <Text style={s.cancelText}>Close</Text>
             </Pressable>
           </View>
@@ -483,8 +637,8 @@ export default function Editor() {
               <Text style={s.imgActionTitle}>Page numbers</Text>
             </Pressable>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
-              <Pressable style={[s.primaryBtn, { flex: 1 }]} testID="page-setup-done" onPress={() => { setPageSetupOpen(false); toast.show('Page setup will be applied on PDF export ✓', 'success'); }}>
-                <Text style={s.primaryBtnText}>Done</Text>
+              <Pressable style={[s.primaryBtn, { flex: 1 }]} testID="page-setup-done" onPress={() => { applyMargins(pageSetup.margins); setPageSetupOpen(false); toast.show('Page setup applied ✓', 'success'); }}>
+                <Text style={s.primaryBtnText}>Apply</Text>
               </Pressable>
             </View>
           </View>
@@ -508,6 +662,13 @@ export default function Editor() {
               <View style={{ flex: 1 }}>
                 <Text style={s.imgActionTitle}>Upload & auto-insert images</Text>
                 <Text style={s.imgActionSub}>Image 1 → Position 1, Image 2 → Position 2, …</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                  {[['Small', 40], ['Medium', 70], ['Full', 100]].map(([lbl, v]) => (
+                    <Pressable key={String(lbl)} testID={`img-size-${lbl}`} style={[s.fontChip, imgSize === v && s.fontChipActive]} onPress={() => setImgSize(v as any)}>
+                      <Text style={[s.fontChipText, imgSize === v && { color: '#fff' }]}>{lbl}</Text>
+                    </Pressable>
+                  ))}
+                </View>
               </View>
             </Pressable>
             <Pressable testID="close-images" style={[s.cancelBtn, { marginTop: 14 }]} onPress={() => setImagesOpen(false)}>
@@ -590,6 +751,16 @@ const s = StyleSheet.create({
   fontChipText: { color: theme.colors.brand, fontSize: 12.5, fontWeight: '600' },
   psLabel: { color: theme.colors.muted, fontSize: 10, letterSpacing: 1, marginTop: 14, marginBottom: 6 },
   psToggle: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  sizeInput: { borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, color: theme.colors.brand, fontSize: 14, width: 90, backgroundColor: theme.colors.surface },
+  sizeApply: { backgroundColor: theme.colors.brand, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  suggestBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f2f7f2', borderTopWidth: 1, borderTopColor: '#d8e8d8', paddingHorizontal: 12, paddingVertical: 8 },
+  suggestText: { flex: 1, color: '#5a6b5a', fontSize: 12.5, fontStyle: 'italic' },
+  suggestBtn: { backgroundColor: '#16a34a', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5 },
+  suggestBtnText: { color: '#fff', fontSize: 11, fontWeight: '600' },
+  hfStrip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 4, backgroundColor: '#eef0f3' },
+  hfText: { color: theme.colors.muted, fontSize: 10.5, fontStyle: 'italic' },
+  askBubble: { position: 'absolute', right: 14, bottom: 150, width: 46, height: 46, borderRadius: 23, backgroundColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 8, zIndex: 40 },
+  fontRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider },
   editorHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.border, backgroundColor: theme.colors.card },
   titleInline: { color: theme.colors.brand, fontSize: 15, fontWeight: '500', paddingVertical: 4 },
   modeLine: { color: theme.colors.muted, fontSize: 10 },

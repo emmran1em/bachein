@@ -16,6 +16,13 @@ export async function sharePdf(url: string, filename: string) {
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.pdf$/i, '') + '.pdf';
   const dest = `${FileSystem.cacheDirectory}${safe}`;
   const r = await FileSystem.downloadAsync(authedUrl, dest);
+  if (r.status && r.status !== 200) {
+    throw new Error(r.status === 401 ? 'Session expired — please log in again' : `Download failed (${r.status})`);
+  }
+  const info = await FileSystem.getInfoAsync(r.uri);
+  if (!info.exists || (info as any).size < 100) {
+    throw new Error('Download failed — file was empty. Please try again.');
+  }
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(r.uri, { mimeType: 'application/pdf', dialogTitle: filename, UTI: 'com.adobe.pdf' });
   }

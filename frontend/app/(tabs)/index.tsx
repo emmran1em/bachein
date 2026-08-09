@@ -236,6 +236,8 @@ export default function Home() {
             <DrawerItem icon="download-outline" label="Downloads" onPress={() => goTo('/downloads')} testID="drawer-downloads" />
             <DrawerItem icon="documents-outline" label="Saved Drafts" onPress={() => goTo('/drafts')} testID="drawer-drafts" />
             <DrawerItem icon="scan-outline" label="Scan Document" onPress={() => goTo('/scanner')} testID="drawer-scanner" />
+            <DrawerItem icon="create-outline" label="Edit Assignment" onPress={() => goTo('/editor?import=1')} testID="drawer-edit-assignment" />
+            <DrawerItem icon="text-outline" label="OCR" onPress={() => goTo('/ocr')} testID="drawer-ocr" />
             <DrawerItem icon="lock-closed-outline" label="Vault" onPress={() => goTo('/(tabs)/vault')} testID="drawer-vault" />
             <DrawerItem icon="logo-github" label="GitHub Workspace" onPress={() => goTo('/github')} testID="drawer-github" />
             <DrawerItem icon="ribbon-outline" label="Plans & Upgrade" onPress={() => goTo('/plans')} testID="drawer-plans" />

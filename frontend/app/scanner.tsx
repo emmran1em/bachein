@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { theme } from '@/src/theme';
 import { api } from '@/src/api';
 
@@ -22,6 +23,44 @@ export default function ScannerScreen() {
   const [docName, setDocName] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
+  const [detailIdx, setDetailIdx] = useState<number | null>(null);
+
+  const importFromGallery = async () => {
+    setErr('');
+    try {
+      const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, base64: true, quality: 0.7, selectionLimit: 10 });
+      if (r.canceled || !r.assets?.length) return;
+      setProcessing(true);
+      const out: string[] = [];
+      for (const a of r.assets) {
+        if (!a.base64) continue;
+        try {
+          const p: any = await api.scannerProcess(a.base64, mode);
+          out.push(p.image_base64);
+        } catch {}
+      }
+      setPages((prev) => [...prev, ...out]);
+    } catch (e: any) { setErr(e.message || 'Import failed'); }
+    finally { setProcessing(false); }
+  };
+
+  const rotatePage = async (idx: number) => {
+    try {
+      const r: any = await api.scannerProcess(pages[idx], mode, 90);
+      setPages((p) => p.map((x, i) => (i === idx ? r.image_base64 : x)));
+    } catch {}
+  };
+
+  const movePage = (idx: number, dir: -1 | 1) => {
+    setPages((p) => {
+      const n = [...p];
+      const j = idx + dir;
+      if (j < 0 || j >= n.length) return p;
+      [n[idx], n[j]] = [n[j], n[idx]];
+      setDetailIdx(j);
+      return n;
+    });
+  };
 
   const capture = async () => {
     if (!camRef.current || processing) return;
@@ -107,13 +146,13 @@ export default function ScannerScreen() {
       {pages.length > 0 && !preview && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 74 }} contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}>
           {pages.map((p, i) => (
-            <View key={i} style={s.thumbWrap}>
+            <Pressable key={i} style={s.thumbWrap} testID={`scan-thumb-${i}`} onPress={() => setDetailIdx(i)}>
               <Image source={{ uri: `data:image/jpeg;base64,${p}` }} style={s.thumb} />
               <Pressable style={s.thumbX} onPress={() => setPages((arr) => arr.filter((_, j) => j !== i))}>
                 <Ionicons name="close" size={11} color="#fff" />
               </Pressable>
               <Text style={s.thumbNo}>{i + 1}</Text>
-            </View>
+            </Pressable>
           ))}
         </ScrollView>
       )}
@@ -140,6 +179,9 @@ export default function ScannerScreen() {
               <Ionicons name={mode === 'color' ? 'color-palette-outline' : 'contrast-outline'} size={16} color={theme.colors.brand} />
               <Text style={s.secondaryText}>{mode === 'color' ? 'Color' : 'B&W'}</Text>
             </Pressable>
+            <Pressable style={s.importBtn} onPress={importFromGallery} testID="scan-import">
+              <Ionicons name="images-outline" size={18} color={theme.colors.brand} />
+            </Pressable>
             <Pressable style={[s.shutter, (!ready || processing) && { opacity: 0.5 }]} disabled={!ready || processing} onPress={capture} testID="scan-capture">
               <View style={s.shutterInner} />
             </Pressable>
@@ -152,6 +194,23 @@ export default function ScannerScreen() {
           </>
         )}
       </View>
+
+      <Modal visible={detailIdx !== null} transparent animationType="fade" onRequestClose={() => setDetailIdx(null)}>
+        <View style={s.detailOverlay}>
+          {detailIdx !== null && pages[detailIdx] && (
+            <>
+              <Image source={{ uri: `data:image/jpeg;base64,${pages[detailIdx]}` }} style={{ flex: 1, margin: 18, borderRadius: 12 }} resizeMode="contain" />
+              <View style={s.detailBar}>
+                <DetailAction icon="arrow-back" label="Move" onPress={() => movePage(detailIdx, -1)} tid="page-move-left" />
+                <DetailAction icon="refresh" label="Rotate" onPress={() => rotatePage(detailIdx)} tid="page-rotate" />
+                <DetailAction icon="trash-outline" label="Delete" onPress={() => { setPages((p) => p.filter((_, j) => j !== detailIdx)); setDetailIdx(null); }} tid="page-delete" />
+                <DetailAction icon="arrow-forward" label="Move" onPress={() => movePage(detailIdx, 1)} tid="page-move-right" />
+                <DetailAction icon="close" label="Close" onPress={() => setDetailIdx(null)} tid="page-close" />
+              </View>
+            </>
+          )}
+        </View>
+      </Modal>
 
       <Modal visible={nameOpen} transparent animationType="fade" onRequestClose={() => setNameOpen(false)}>
         <View style={s.modalOverlay}>
@@ -195,6 +254,16 @@ function Header({ router, pages }: any) {
   );
 }
 
+function DetailAction({ icon, label, onPress, tid }: { icon: any; label: string; onPress: () => void; tid: string }) {
+  return (
+    <Pressable style={s.detailAction} onPress={onPress} testID={tid}>
+      <Ionicons name={icon} size={22} color="#fff" />
+      <Text style={s.detailActionText}>{label}</Text>
+    </Pressable>
+  );
+}
+
+
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.surface },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 8 },
@@ -215,6 +284,11 @@ const s = StyleSheet.create({
   shutter: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#fff', borderWidth: 3, borderColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center' },
   shutterInner: { width: 54, height: 54, borderRadius: 27, backgroundColor: theme.colors.brand },
   modeBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff', minWidth: 84, justifyContent: 'center' },
+  importBtn: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(10,12,16,0.95)' },
+  detailBar: { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 14, paddingBottom: 30 },
+  detailAction: { alignItems: 'center', gap: 4, minWidth: 56 },
+  detailActionText: { color: '#fff', fontSize: 10.5 },
   secondaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: '#fff', justifyContent: 'center' },
   secondaryText: { color: theme.colors.brand, fontWeight: '500', fontSize: 13 },
   primaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, backgroundColor: theme.colors.brand, justifyContent: 'center' },

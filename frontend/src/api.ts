@@ -39,6 +39,15 @@ async function request<T = any>(path: string, opts: RequestInit = {}): Promise<T
   let data: any = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
+    if (res.status === 401) {
+      // Stale/expired session — clear it and send the user to login
+      try {
+        await AsyncStorage.removeItem(TOKEN_KEY);
+        const { router } = require('expo-router');
+        router.replace('/login');
+      } catch {}
+      throw new Error('Session expired — please log in again');
+    }
     const msg = data?.detail || data?.message || `Request failed (${res.status})`;
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
   }
@@ -158,9 +167,13 @@ export const api = {
   editorImport: (body: { file_base64: string; filename: string }) =>
     request('/editor/import', { method: 'POST', body: JSON.stringify(body) }),
   editorVersions: (id: string) => request(`/editor/${id}/versions`),
+  editorSuggest: (body: { doc_type: string; current_html: string }) =>
+    request('/editor/suggest', { method: 'POST', body: JSON.stringify(body) }),
+  ocrExtract: (body: { file_base64: string; filename: string }) =>
+    request('/ocr/extract', { method: 'POST', body: JSON.stringify(body) }),
   // ─── Scanner (Phase 11) ───
-  scannerProcess: (image_base64: string, mode = 'color') =>
-    request('/scanner/process', { method: 'POST', body: JSON.stringify({ image_base64, mode }) }),
+  scannerProcess: (image_base64: string, mode = 'color', rotate = 0) =>
+    request('/scanner/process', { method: 'POST', body: JSON.stringify({ image_base64, mode, rotate }) }),
   scannerCreatePdf: (images: string[], name?: string) =>
     request('/scanner/create-pdf', { method: 'POST', body: JSON.stringify({ images, name }) }),
   editorInvite: (body: { document_id: string; email: string; permission: string }) =>
