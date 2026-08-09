@@ -47,3 +47,22 @@
 - GitHub Workspace connector — creds (GITHUB_CLIENT_ID/SECRET) already in backend/.env; NEEDS user to set OAuth callback URL in their GitHub OAuth App before building
 - AWS Rekognition face match · System document handler (EAS build) · Push notifications
 - Refactor: split server.py into routers (auth/documents)
+
+## June 2026 fork — iterations 11–13 (all testing-agent green)
+- **Floating dock** bottom nav (Home, Documents, center Create +, File Kit, AI); hides when keyboard opens
+- **Editor**: 401 auto-logout (JWT now 30d), autosave→drafts on back, AI command writes NEW content too, spelling/grammar proofread, typed font sizes 6–96 + preset chips, searchable font picker with CSS fallback stacks, font colour palette (8 dots), default black text, horizontal A4 column pages (native webview only), ghost inline grey Shadow AI suggestion (span#bachein-ghost, stripped on save/export), long-press Ask Bachein bubble
+- **NDA signed PDF** embeds sender+receiver signatures (draw/type/upload); signature dates date-only
+- **OCR tool** `/ocr` (Gemini vision engine via ocr_service.py + <mark> uncertainty flags) + Edit Assignment drawer entry (/editor?import=1)
+- **File Kit Phase 10**: Protect (AES-256) / Unlock PDF; **Sign Document** tool `/sign-pdf` (sign-prepare/sign-apply endpoints, draggable placement, embeds into PDF → Downloads)
+- **Pro scanner** `/scanner`: fast capture → bg detect+warp (POST /scanner/detect, /scanner/apply), thumbnails, review modal (Crop draggable corners, Markup freehand → /scanner/annotate, Sign on image → /scanner/sign-image, Rotate, Filter, Retake, Delete), post-capture gallery grid (reorder arrows, add-page tile, Share/Sign/Save PDF); `?return=create` hands pages to create flow via src/lib/scanStore
+- **create/mode.tsx** Take-photo bug fixed (was unimported Platform/FileSystem) — now routes to scanner
+- **Viewer** horizontal page swiping (POST /api/pdf/pages) with fallback iframe/WebView
+- **Templates**: TemplatePicker (5 NDA + 5 generic) in secure + normal create flows; ai/generate takes `template`, embeds 'Dated: <date>' (date only)
+- **Receiver gating**: locked gate card pre-verification (content hidden), attachments + date-only dates shown post-unlock
+- **Chat keyboard fix**: react-native-keyboard-controller KAV + composer clearance; KeyboardProvider in root layout
+- Drawer scrollable (Profile/Log out reachable)
+
+## Pending user inputs
+- AWS Rekognition: needs AWS_ACCESS_KEY_ID/SECRET/region from user
+- GitHub OAuth: user must set callback URL https://nda-hub-1.preview.emergentagent.com/github in their GitHub OAuth App
+- Next big feature approved: local-first storage + user-owned Google Drive sync (needs Google OAuth creds w/ Drive scope)
