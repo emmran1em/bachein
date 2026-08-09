@@ -9,6 +9,7 @@ import { api, uploadFile, getUser } from '@/src/api';
 import { useToast } from '@/src/components/Toast';
 import { playSent } from '@/src/lib/sound';
 import SignatureBottomSheet, { SignatureView, SignatureData } from '@/src/components/SignatureBottomSheet';
+import TemplatePicker from '@/src/components/TemplatePicker';
 
 type Step = 'intent' | 'draft' | 'attach' | 'security' | 'sign' | 'recipient';
 
@@ -34,6 +35,7 @@ export default function SecureCreate() {
   const { category } = useLocalSearchParams<{ category: string }>();
   const [step, setStep] = useState<Step>('intent');
   const [intent, setIntent] = useState('');
+  const [template, setTemplate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState<{ title: string; content: string; cover_page: string } | null>(null);
   const [review, setReview] = useState<any>(null);
@@ -74,7 +76,7 @@ export default function SecureCreate() {
   const draftDoc = async () => {
     setErr(''); setLoading(true);
     try {
-      const r: any = await api.generate({ prompt: intent, category: category || 'NDA' });
+      const r: any = await api.generate({ prompt: intent, category: category || 'NDA', template: template || undefined });
       setDraft(r);
       setReviewing(true);
       try {
@@ -143,8 +145,9 @@ export default function SecureCreate() {
                 placeholderTextColor={theme.colors.muted}
                 multiline
               />
+              <TemplatePicker category={category} selected={template} onSelect={setTemplate} />
               {err ? <Text style={s.err}>{err}</Text> : null}
-              <Pressable testID="draft-btn" style={[s.primaryBtn, (!intent || loading) && { opacity: 0.6 }]} disabled={!intent || loading} onPress={draftDoc}>
+              <Pressable testID="draft-btn" style={[s.primaryBtn, (!intent || !template || loading) && { opacity: 0.6 }]} disabled={!intent || !template || loading} onPress={draftDoc}>
                 {loading ? <ActivityIndicator color={theme.colors.onBrandPrimary} /> : (<><Ionicons name="sparkles" size={16} color={theme.colors.onBrandPrimary} /><Text style={s.primaryBtnText}>Draft with AI</Text></>)}
               </Pressable>
             </>

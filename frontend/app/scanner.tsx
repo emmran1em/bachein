@@ -8,6 +8,9 @@ import * as ImagePicker from 'expo-image-picker';
 import Svg, { Polygon, Circle } from 'react-native-svg';
 import { api } from '@/src/api';
 import { scanStore } from '@/src/lib/scanStore';
+import PageMarkup from '@/src/components/PageMarkup';
+import PageSign from '@/src/components/PageSign';
+import { sharePdf } from '@/src/share';
 
 type Filter = 'color' | 'bw' | 'original';
 type Page = {
@@ -39,6 +42,10 @@ export default function ScannerScreen() {
   const [flash, setFlash] = useState(false); // shutter blink
   const [reviewIdx, setReviewIdx] = useState<number | null>(null);
   const [cropIdx, setCropIdx] = useState<number | null>(null);
+  const [markupIdx, setMarkupIdx] = useState<number | null>(null);
+  const [signIdx, setSignIdx] = useState<number | null>(null);
+  const [view, setView] = useState<'camera' | 'gallery'>('camera');
+  const [sharing, setSharing] = useState(false);
   const [nameOpen, setNameOpen] = useState(false);
   const [docName, setDocName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -135,7 +142,18 @@ export default function ScannerScreen() {
       router.back();
       return;
     }
-    setNameOpen(true);
+    setView('gallery'); // professional post-capture gallery (crop/markup/share/signature/add)
+  };
+
+  const shareAsPdf = async () => {
+    if (!pages.length || sharing) return;
+    setSharing(true);
+    try {
+      const imgs = pages.map((p) => p.processed || p.raw);
+      const r: any = await api.scannerCreatePdf(imgs, docName.trim() || undefined);
+      await sharePdf(api.downloadFileUrl(r.download_id), `${r.name}.pdf`);
+    } catch (e: any) { setErr(e.message || 'Share failed'); }
+    finally { setSharing(false); }
   };
 
   const createPdf = async () => {
@@ -186,6 +204,58 @@ export default function ScannerScreen() {
 
   return (
     <SafeAreaView style={s.container} edges={['top']} testID="scanner-screen">
+      {view === 'gallery' ? (
+        <>
+          {/* ── Post-capture gallery (sc2-style) ── */}
+          <View style={s.topBar}>
+            <Pressable onPress={() => setView('camera')} style={s.roundBtn} testID="gallery-back">
+              <Ionicons name="chevron-back" size={20} color="#fff" />
+            </Pressable>
+            <TextInput
+              testID="gallery-name"
+              style={s.galleryName}
+              value={docName}
+              onChangeText={setDocName}
+              placeholder={`Scan ${new Date().toLocaleDateString()}`}
+              placeholderTextColor="#7b8494"
+            />
+            <Ionicons name="pencil-outline" size={15} color="#7b8494" />
+          </View>
+          <ScrollView contentContainerStyle={s.grid}>
+            {pages.map((p, i) => (
+              <Pressable key={p.id} style={s.gridTile} testID={`gallery-page-${i}`} onPress={() => setReviewIdx(i)}>
+                <Image source={{ uri: `data:image/jpeg;base64,${p.processed || p.raw}` }} style={s.gridImg} />
+                <View style={s.gridNo}><Text style={s.gridNoText}>{String(i + 1).padStart(2, '0')}</Text></View>
+                {p.status === 'processing' && <View style={s.thumbBusy}><ActivityIndicator color="#fff" /></View>}
+                <View style={s.gridArrows}>
+                  {i > 0 ? (
+                    <Pressable testID={`gallery-move-left-${i}`} onPress={() => movePage(i, -1)} style={s.gridArrowBtn} hitSlop={8}>
+                      <Ionicons name="chevron-back" size={14} color="#fff" />
+                    </Pressable>
+                  ) : <View style={{ width: 24 }} />}
+                  {i < pages.length - 1 ? (
+                    <Pressable testID={`gallery-move-right-${i}`} onPress={() => movePage(i, 1)} style={s.gridArrowBtn} hitSlop={8}>
+                      <Ionicons name="chevron-forward" size={14} color="#fff" />
+                    </Pressable>
+                  ) : <View style={{ width: 24 }} />}
+                </View>
+              </Pressable>
+            ))}
+            <Pressable style={s.addTile} onPress={() => setView('camera')} testID="gallery-add-tile">
+              <Ionicons name="camera-outline" size={26} color="#8a94a3" />
+              <Text style={s.addTileText}>Tap to add new pages</Text>
+            </Pressable>
+          </ScrollView>
+          {!!err && <Text style={s.galleryErr}>{err}</Text>}
+          <View style={s.galleryBar}>
+            <ToolBtn icon="camera-outline" label="Add" tid="gallery-add" onPress={() => setView('camera')} />
+            <ToolBtn icon="share-social-outline" label={sharing ? 'Sharing…' : 'Share'} tid="gallery-share" onPress={shareAsPdf} />
+            <ToolBtn icon="create-outline" label="Sign" tid="gallery-sign" onPress={() => pages.length > 0 && setSignIdx(0)} />
+            <ToolBtn icon="document-text-outline" label="Save PDF" tid="gallery-save" onPress={() => setNameOpen(true)} />
+          </View>
+        </>
+      ) : (
+      <>
       {/* Top bar */}
       <View style={s.topBar}>
         <Pressable onPress={() => router.back()} style={s.roundBtn} testID="scanner-back">
@@ -249,11 +319,13 @@ export default function ScannerScreen() {
         <Pressable style={[s.shutter, !ready && { opacity: 0.5 }]} disabled={!ready} onPress={capture} testID="scan-capture">
           <View style={s.shutterInner} />
         </Pressable>
-        <Pressable style={s.sideBtn} onPress={() => pages.length && setReviewIdx(pages.length - 1)} testID="scan-review" disabled={!pages.length}>
+        <Pressable style={s.sideBtn} onPress={() => pages.length && setView('gallery')} testID="scan-review" disabled={!pages.length}>
           <Ionicons name="albums-outline" size={22} color={pages.length ? '#fff' : '#4a5057'} />
           <Text style={[s.sideLabel, !pages.length && { color: '#4a5057' }]}>Pages</Text>
         </Pressable>
       </View>
+      </>
+      )}
 
       {/* ── Review modal ── */}
       <Modal visible={reviewIdx !== null} transparent={false} animationType="slide" onRequestClose={() => setReviewIdx(null)}>
@@ -289,10 +361,11 @@ export default function ScannerScreen() {
             </View>
             <View style={s.toolRow}>
               <ToolBtn icon="crop-outline" label="Crop" tid="review-crop" onPress={() => setCropIdx(reviewIdx)} />
+              <ToolBtn icon="brush-outline" label="Markup" tid="review-markup" onPress={() => setMarkupIdx(reviewIdx)} />
+              <ToolBtn icon="create-outline" label="Sign" tid="review-sign" onPress={() => setSignIdx(reviewIdx)} />
               <ToolBtn icon="refresh-outline" label="Rotate" tid="review-rotate" onPress={() => rotatePage(reviewIdx)} />
               <ToolBtn icon="color-filter-outline" label={FILTER_LABEL[pages[reviewIdx].filter]} tid="review-filter" onPress={() => cycleFilter(reviewIdx)} />
-              <ToolBtn icon="swap-horizontal-outline" label="Move" tid="review-move" onPress={() => movePage(reviewIdx, 1)} />
-              <ToolBtn icon="camera-outline" label="Retake" tid="review-retake" onPress={() => deletePage(reviewIdx)} />
+              <ToolBtn icon="camera-outline" label="Retake" tid="review-retake" onPress={() => { deletePage(reviewIdx); setView('camera'); }} />
               <ToolBtn icon="trash-outline" label="Delete" tid="review-delete" danger onPress={() => deletePage(reviewIdx)} />
             </View>
           </SafeAreaView>
@@ -309,6 +382,24 @@ export default function ScannerScreen() {
           />
         )}
       </Modal>
+
+      {/* ── Markup & Sign on page ── */}
+      {markupIdx !== null && pages[markupIdx] && (
+        <PageMarkup
+          visible
+          image={pages[markupIdx].processed || pages[markupIdx].raw}
+          onClose={() => setMarkupIdx(null)}
+          onApply={(b64) => { updatePage(pages[markupIdx].id, { processed: b64 }); setMarkupIdx(null); }}
+        />
+      )}
+      {signIdx !== null && pages[signIdx] && (
+        <PageSign
+          visible
+          image={pages[signIdx].processed || pages[signIdx].raw}
+          onClose={() => setSignIdx(null)}
+          onApply={(b64) => { updatePage(pages[signIdx].id, { processed: b64 }); setSignIdx(null); }}
+        />
+      )}
 
       {/* ── Name & save modal ── */}
       <Modal visible={nameOpen} transparent animationType="fade" onRequestClose={() => setNameOpen(false)}>
@@ -498,4 +589,17 @@ const s = StyleSheet.create({
   sheet: { backgroundColor: '#16191d', borderRadius: 18, padding: 20 },
   sheetTitle: { color: '#fff', fontSize: 17, fontWeight: '600', marginBottom: 12 },
   input: { backgroundColor: '#0b0d10', borderWidth: 1, borderColor: '#3a3f46', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, color: '#fff', fontSize: 14 },
+  // gallery
+  galleryName: { flex: 1, color: '#fff', fontSize: 16, fontWeight: '600', paddingVertical: 4 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, padding: 14, paddingBottom: 30 },
+  gridTile: { width: '47%', aspectRatio: 0.72, borderRadius: 10, overflow: 'hidden', backgroundColor: '#16191d', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  gridImg: { width: '100%', height: '100%' },
+  gridNo: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.55)', paddingVertical: 4, paddingHorizontal: 8 },
+  gridNoText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  gridArrows: { position: 'absolute', top: 6, left: 6, right: 6, flexDirection: 'row', justifyContent: 'space-between' },
+  gridArrowBtn: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
+  addTile: { width: '47%', aspectRatio: 0.72, borderRadius: 10, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#3a3f46', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10 },
+  addTileText: { color: '#8a94a3', fontSize: 12, textAlign: 'center' },
+  galleryBar: { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 12, paddingBottom: 24, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)', backgroundColor: '#0b0d10' },
+  galleryErr: { color: '#f87171', textAlign: 'center', paddingVertical: 6, fontSize: 12 },
 });

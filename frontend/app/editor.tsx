@@ -59,6 +59,20 @@ export default function Editor() {
   const suggestTimer = useRef<any>(null);
   const [askOpen, setAskOpen] = useState(false);
   const richRef = useRef<any>(null);
+  const ghostSetAt = useRef(0);
+
+  // ── Ghost (VS-Code style inline grey suggestion) helpers ──
+  const stripGhost = (v: string) => v.replace(/<span[^>]*id="bachein-ghost"[^>]*>[\s\S]*?<\/span>/g, '');
+  const clearGhost = useCallback(() => {
+    richRef.current?.commandDOM?.(`(function(){var g=document.getElementById('bachein-ghost');if(g)g.remove();})();`);
+  }, []);
+  const injectGhost = useCallback((text: string) => {
+    ghostSetAt.current = Date.now();
+    const t = JSON.stringify(' ' + text);
+    richRef.current?.commandDOM?.(
+      `(function(){var g=document.getElementById('bachein-ghost');if(g)g.remove();var s=document.createElement('span');s.id='bachein-ghost';s.setAttribute('contenteditable','false');s.style.cssText='color:#9aa3af;font-style:italic;opacity:0.85;';s.textContent=${t};var host=document.body.lastElementChild||document.body;host.appendChild(s);})();`
+    );
+  }, []);
   const autosaveT = useRef<any>(null);
 
   // Load existing doc when id provided
@@ -79,7 +93,7 @@ export default function Editor() {
   const save = async (silent = false) => {
     setSaving(true);
     try {
-      const res: any = await api.editorSave({ id: docId, title, doc_type: docType, html });
+      const res: any = await api.editorSave({ id: docId, title, doc_type: docType, html: stripGhost(html) });
       setDocId(res.id);
       setSavedAt(new Date(res.saved_at).toLocaleTimeString());
       if (!silent) toast.show('Saved ✓', 'success');
@@ -129,7 +143,7 @@ export default function Editor() {
       const res = await fetch(`${API_BASE}/editor/export-pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ id: docId, title, doc_type: docType, html, page_setup: pageSetup }),
+        body: JSON.stringify({ id: docId, title, doc_type: docType, html: stripGhost(html), page_setup: pageSetup }),
       });
       const blob = await res.blob();
       if (Platform.OS === 'web') {
@@ -179,10 +193,39 @@ export default function Editor() {
     toast.show(`Font size ${px}px — select text and re-apply anytime ✓`, 'success');
   };
 
+  const FONT_STACKS: Record<string, string> = {
+    'Times New Roman': "'Times New Roman', 'Tinos', Georgia, 'Noto Serif', serif",
+    'Georgia': "Georgia, 'Noto Serif', serif",
+    'Garamond': "Garamond, 'EB Garamond', Georgia, serif",
+    'Arial': "Arial, 'Arimo', Helvetica, sans-serif",
+    'Calibri': "Calibri, 'Carlito', 'Segoe UI', sans-serif",
+    'Helvetica': "Helvetica, Arial, sans-serif",
+    'Verdana': "Verdana, Geneva, sans-serif",
+    'Roboto': "Roboto, 'Noto Sans', sans-serif",
+    'Tahoma': "Tahoma, Verdana, sans-serif",
+    'Trebuchet MS': "'Trebuchet MS', Tahoma, sans-serif",
+    'Courier New': "'Courier New', 'Cousine', monospace",
+    'Book Antiqua': "'Book Antiqua', Palatino, Georgia, serif",
+    'Palatino': "Palatino, 'Palatino Linotype', Georgia, serif",
+    'Comic Sans MS': "'Comic Sans MS', 'Comic Neue', cursive",
+    'Impact': "Impact, 'Anton', sans-serif",
+  };
+
   const applyFont = (name: string) => {
-    richRef.current?.commandDOM?.(`document.execCommand('fontName',false,'${name.replace(/'/g, "\\'")}');`);
+    const stack = (FONT_STACKS[name] || name).replace(/"/g, "'");
+    // styleWithCSS + fontName gives a span with the full font-family stack (device fallbacks work)
+    richRef.current?.commandDOM?.(
+      `(function(){try{document.execCommand('styleWithCSS',false,true);}catch(e){};document.execCommand('fontName',false,"${stack.replace(/"/g, '\\"')}");})();`
+    );
     setFontOpen(false);
     toast.show(`${name} applied to selection ✓`, 'success');
+  };
+
+  const applyColor = (color: string) => {
+    richRef.current?.commandDOM?.(
+      `(function(){try{document.execCommand('styleWithCSS',false,true);}catch(e){};document.execCommand('foreColor',false,'${color}');})();`
+    );
+    toast.show('Colour applied to selection ✓', 'success');
   };
 
   const applyMargins = (m: string) => {
@@ -208,8 +251,9 @@ export default function Editor() {
       if (html.replace(/<[^>]+>/g, '').trim().length < 20) return;
       setSuggestBusy(true);
       try {
-        const r: any = await api.editorSuggest({ doc_type: docType, current_html: html });
+        const r: any = await api.editorSuggest({ doc_type: docType, current_html: stripGhost(html) });
         setSuggestion(r.suggestion || '');
+        if (r.suggestion) injectGhost(r.suggestion); // grey inline ghost text, VS-Code style
       } catch {}
       setSuggestBusy(false);
     }, 30000);
@@ -218,7 +262,13 @@ export default function Editor() {
 
   const acceptSuggestion = () => {
     if (!suggestion) return;
+    clearGhost();
     richRef.current?.insertHTML?.(` ${suggestion}`);
+    setSuggestion('');
+  };
+
+  const dismissSuggestion = () => {
+    clearGhost();
     setSuggestion('');
   };
 
@@ -425,7 +475,7 @@ export default function Editor() {
                 <Pressable testID="suggest-accept" style={s.suggestBtn} onPress={acceptSuggestion}>
                   <Text style={s.suggestBtnText}>Insert</Text>
                 </Pressable>
-                <Pressable testID="suggest-dismiss" onPress={() => setSuggestion('')}>
+                <Pressable testID="suggest-dismiss" onPress={dismissSuggestion}>
                   <Ionicons name="close" size={15} color={theme.colors.muted} />
                 </Pressable>
               </>
@@ -463,16 +513,27 @@ export default function Editor() {
           ref={richRef}
           initialContentHTML={html}
           placeholder="Start writing your document…"
-          onChange={(v) => { setHtml(v); scheduleAutosave(); }}
+          onChange={(v) => {
+            // typing removes the ghost suggestion (ignore the change event caused by the injection itself)
+            if (suggestion && Date.now() - ghostSetAt.current > 900) {
+              clearGhost();
+              setSuggestion('');
+            }
+            setHtml(stripGhost(v));
+            scheduleAutosave();
+          }}
           style={s.editor}
           editorStyle={{
             backgroundColor: '#e9ebee',
-            color: '#22201C',
+            color: '#000000',
+            caretColor: '#000000',
             contentCSSText:
-              'font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.65;' +
-              'background:#ffffff;max-width:794px;margin:14px auto;padding:48px 44px;min-height:1123px;' +
-              'box-shadow:0 2px 16px rgba(0,0,0,0.14);border-radius:2px;' +
-              'background-image:repeating-linear-gradient(to bottom, transparent 0px, transparent 1121px, #c9d1dc 1121px, #c9d1dc 1123px);',
+              'font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.65;color:#000;' +
+              'height:540px;box-sizing:border-box;overflow-x:auto;overflow-y:hidden;' +
+              'column-width:calc(100vw - 60px);column-gap:40px;column-fill:auto;' +
+              'column-rule:2px dashed #c2cad6;' +
+              'background:#ffffff;margin:10px 14px;padding:30px 24px;' +
+              'box-shadow:0 2px 14px rgba(0,0,0,0.12);border-radius:4px;',
           }}
           initialHeight={520}
         />
@@ -526,6 +587,17 @@ export default function Editor() {
                 <Text style={s.imgActionSub}>Times New Roman, Calibri, Roboto & more</Text>
               </View>
             </Pressable>
+            <View style={s.imgAction}>
+              <Ionicons name="color-palette-outline" size={18} color={theme.colors.brand} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.imgActionTitle}>Font colour (selection)</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  {['#000000', '#1e3a8a', '#b91c1c', '#166534', '#b45309', '#6b21a8', '#0e7490', '#525252'].map((c) => (
+                    <Pressable key={c} testID={`font-color-${c.slice(1)}`} onPress={() => applyColor(c)} style={[s.colorDot, { backgroundColor: c }]} />
+                  ))}
+                </View>
+              </View>
+            </View>
             <Pressable testID="tool-shadow-ai" style={s.imgAction} onPress={() => setShadowOn((v) => !v)}>
               <Ionicons name={shadowOn ? 'flash' : 'flash-outline'} size={18} color={shadowOn ? '#16a34a' : theme.colors.brand} />
               <View style={{ flex: 1 }}>
@@ -761,6 +833,7 @@ const s = StyleSheet.create({
   hfText: { color: theme.colors.muted, fontSize: 10.5, fontStyle: 'italic' },
   askBubble: { position: 'absolute', right: 14, bottom: 150, width: 46, height: 46, borderRadius: 23, backgroundColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 8, zIndex: 40 },
   fontRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider },
+  colorDot: { width: 30, height: 30, borderRadius: 15, borderWidth: 2, borderColor: 'rgba(0,0,0,0.12)' },
   editorHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.border, backgroundColor: theme.colors.card },
   titleInline: { color: theme.colors.brand, fontSize: 15, fontWeight: '500', paddingVertical: 4 },
   modeLine: { color: theme.colors.muted, fontSize: 10 },

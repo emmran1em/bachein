@@ -227,6 +227,7 @@ export default function Home() {
                 <Text style={ss.drawerEmail}>{user?.email || '—'}</Text>
               </View>
             </View>
+            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
             <DrawerItem icon="home-outline" label="Home" onPress={() => setDrawer(false)} testID="drawer-home" />
             <DrawerItem icon="add-circle-outline" label="Create Document" onPress={() => goTo('/create')} testID="drawer-create" />
             <DrawerItem icon="create-outline" label="Write Document" onPress={() => goTo('/editor')} testID="drawer-write" />
@@ -244,6 +245,7 @@ export default function Home() {
             <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
             <DrawerItem icon="person-outline" label="Profile" onPress={() => goTo('/(tabs)/profile')} testID="drawer-profile" />
             <DrawerItem icon="log-out-outline" label="Log out" onPress={logout} testID="drawer-logout" danger />
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>

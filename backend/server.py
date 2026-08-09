@@ -76,6 +76,7 @@ class GenerateRequest(BaseModel):
     prompt: str
     category: str = "Normal PDF"
     sub_type: Optional[str] = None
+    template: Optional[str] = None
 
 class GenerateResponse(BaseModel):
     title: str
@@ -473,7 +474,10 @@ async def ai_generate(req: GenerateRequest, user=Depends(get_current_user)):
         "Respond in plain text using clear section headings (no markdown asterisks)."
     )
     prompt = (
-        f"Category: {req.category}\nSub-type: {req.sub_type or 'General'}\nUser Request: {req.prompt}\n\n"
+        f"Category: {req.category}\nSub-type: {req.sub_type or 'General'}\n"
+        + (f"Template style: {req.template} — structure and tone MUST follow this template style.\n" if req.template else "")
+        + f"User Request: {req.prompt}\n\n"
+        f"Date of this document: {datetime.now(timezone.utc).strftime('%d %B %Y')} — include a line 'Dated: {datetime.now(timezone.utc).strftime('%d %B %Y')}' near the top of the document body (date only, never a time).\n\n"
         f"Please produce:\n1. A short title (single line, <12 words) prefixed with 'TITLE:'\n"
         f"2. A one-paragraph cover-page abstract prefixed with 'COVER:'\n"
         f"3. The full document body prefixed with 'CONTENT:'\n"
@@ -1136,7 +1140,7 @@ def _draw_signature_on_page(page, sig_json: str, label: str, who: str, when: str
     page.draw_rect(_fitz.Rect(x, y, x + BOX_W, y + BOX_H), color=(0.6, 0.6, 0.65), width=0.7)
     page.insert_text((x, y - 6), label, fontsize=9, fontname="helv", color=(0.2, 0.2, 0.3))
     page.insert_text((x, y + BOX_H + 12), who[:40], fontsize=8, color=(0.35, 0.35, 0.4))
-    page.insert_text((x, y + BOX_H + 23), (when or "")[:19].replace("T", " "), fontsize=7.5, color=(0.5, 0.5, 0.55))
+    page.insert_text((x, y + BOX_H + 23), (when or "")[:10], fontsize=7.5, color=(0.5, 0.5, 0.55))
     try:
         sig = _json.loads(sig_json) if isinstance(sig_json, str) else (sig_json or {})
     except Exception:
@@ -1398,9 +1402,12 @@ async def editor_ai(req: EditorAiRequest, user=Depends(get_current_user)):
     mode_name, system = PROFESSION_MODES.get(req.doc_type, PROFESSION_MODES["Other"])
     prompt = (
         f"You are in {mode_name}. Current document HTML is below. "
-        f"Apply the user's instruction and return the FULL updated HTML only, no explanations, no markdown fences.\n\n"
+        f"Follow the user's instruction exactly:\n"
+        f"- If they ask to WRITE, CREATE or CONTINUE content (e.g. 'write a story about…'), WRITE that full content in rich HTML (headings, paragraphs) — appended to / replacing the document as appropriate. Never return the document unchanged.\n"
+        f"- If they ask to MODIFY (rewrite, translate, restyle, fix), apply the change across the document.\n"
+        f"Return the FULL updated HTML only, no explanations, no markdown fences.\n\n"
         f"INSTRUCTION: {req.instruction}\n\n"
-        f"CURRENT HTML:\n{req.current_html[:12000]}"
+        f"CURRENT HTML:\n{req.current_html[:12000] or '(empty document)'}"
     )
     try:
         text = await gemini_chat(system, prompt, session_id=f"editor-{user['id']}-{uuid.uuid4()}", model="gemini-3.1-pro-preview")
@@ -2062,6 +2069,140 @@ async def sign_apply(req: SignApplyRequest, user=Depends(get_current_user)):
     await db.downloads.insert_one(dict(dl))
     await db.signing_sessions.delete_one({"id": req.session_id})
     return {"download_id": dl["id"], "name": dl["name"], "size": len(out)}
+
+
+# ══════════════ PDF page renderer (horizontal viewer) ══════════════
+class PdfPagesRequest(BaseModel):
+    pdf_base64: str
+    dpi: int = 110
+
+
+@api.post("/pdf/pages")
+async def pdf_pages(req: PdfPagesRequest, user=Depends(get_current_user)):
+    """Render a PDF into page images for the swipeable horizontal viewer."""
+    import fitz
+    import base64 as _b64
+    try:
+        raw = _b64.b64decode(req.pdf_base64)
+        pdf = fitz.open(stream=raw, filetype="pdf")
+    except Exception:
+        raise HTTPException(400, "Could not read PDF")
+    pages = []
+    for pg in list(pdf)[:60]:
+        pix = pg.get_pixmap(dpi=min(max(req.dpi, 60), 160))
+        pages.append(_b64.b64encode(pix.tobytes("jpeg")).decode())
+    return {"pages": pages, "total": pdf.page_count}
+
+
+# ══════════════ Scanner — markup (freehand) & sign-on-image ══════════════
+class AnnotateRequest(BaseModel):
+    image_base64: str
+    strokes: List[List[List[float]]]  # strokes → points → [x, y] normalized 0-1
+    color: str = "#e11d48"
+    width: float = 0.006  # stroke width relative to image width
+
+
+@api.post("/scanner/annotate")
+async def scanner_annotate(req: AnnotateRequest, user=Depends(get_current_user)):
+    """Flatten freehand markup strokes onto the page image."""
+    import numpy as _np
+    import cv2 as _cv2
+    img = _decode_img(req.image_base64)
+    h, w = img.shape[:2]
+    c = req.color.lstrip("#")
+    try:
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except Exception:
+        r, g, b = 225, 29, 72
+    thick = max(2, int(req.width * w))
+    for stroke in req.strokes[:200]:
+        pts = _np.array([[int(p[0] * w), int(p[1] * h)] for p in stroke if len(p) == 2], _np.int32)
+        if len(pts) >= 2:
+            _cv2.polylines(img, [pts], False, (b, g, r), thick, _cv2.LINE_AA)
+        elif len(pts) == 1:
+            _cv2.circle(img, tuple(pts[0]), thick, (b, g, r), -1, _cv2.LINE_AA)
+    return {"image_base64": _encode_img(img)}
+
+
+class SignImageRequest(BaseModel):
+    image_base64: str
+    signature: Dict[str, Any]  # {mode, paths|text|image_b64}
+    x: float
+    y: float
+    w: float  # normalized box width
+
+
+@api.post("/scanner/sign-image")
+async def scanner_sign_image(req: SignImageRequest, user=Depends(get_current_user)):
+    """Embed a signature directly onto a scanned page image."""
+    import numpy as _np
+    import cv2 as _cv2
+    import base64 as _b64
+    import re as _re
+    img = _decode_img(req.image_base64)
+    h, w = img.shape[:2]
+    box_w = max(40, int(min(req.w, 0.9) * w))
+    box_h = int(box_w * 0.38)
+    x0 = int(min(max(req.x, 0.0), 1.0) * w)
+    y0 = int(min(max(req.y, 0.0), 1.0) * h)
+    x0 = min(x0, w - box_w - 2)
+    y0 = min(y0, h - box_h - 2)
+    sig = req.signature or {}
+    mode = sig.get("mode")
+    ink = (89, 31, 26)  # BGR dark blue-ish ink
+    if mode == "draw" and sig.get("paths"):
+        pts_all, strokes = [], []
+        for p in sig["paths"]:
+            pts = [(float(a), float(b)) for a, b in _re.findall(r"[ML]?\s*(-?[\d.]+),(-?[\d.]+)", p)]
+            if pts:
+                strokes.append(pts)
+                pts_all.extend(pts)
+        if pts_all:
+            xs = [p[0] for p in pts_all]; ys = [p[1] for p in pts_all]
+            minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+            sw = max(1.0, maxx - minx); sh = max(1.0, maxy - miny)
+            scale = min(box_w / sw, box_h / sh)
+            ox = x0 + (box_w - sw * scale) / 2
+            oy = y0 + (box_h - sh * scale) / 2
+            thick = max(2, int(box_h / 34))
+            for pts in strokes:
+                arr = _np.array([[int(ox + (px - minx) * scale), int(oy + (py - miny) * scale)] for px, py in pts], _np.int32)
+                if len(arr) >= 2:
+                    _cv2.polylines(img, [arr], False, ink, thick, _cv2.LINE_AA)
+    elif mode == "type" and sig.get("text"):
+        from PIL import Image as _PImage, ImageDraw as _PDraw, ImageFont as _PFont
+        try:
+            import matplotlib
+            font_path = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans-Oblique.ttf")
+            font = _PFont.truetype(font_path, max(16, int(box_h * 0.55)))
+        except Exception:
+            font = _PFont.load_default()
+        pil = _PImage.fromarray(_cv2.cvtColor(img, _cv2.COLOR_BGR2RGB))
+        _PDraw.Draw(pil).text((x0 + 4, y0 + box_h * 0.2), sig["text"][:40], fill=(26, 31, 89), font=font)
+        img = _cv2.cvtColor(_np.array(pil), _cv2.COLOR_RGB2BGR)
+    elif mode == "upload" and sig.get("image_b64"):
+        raw = sig["image_b64"]
+        if "," in raw[:80]:
+            raw = raw.split(",", 1)[1]
+        try:
+            arr = _np.frombuffer(_b64.b64decode(raw), dtype=_np.uint8)
+            sg = _cv2.imdecode(arr, _cv2.IMREAD_UNCHANGED)
+            sh_, sw_ = sg.shape[:2]
+            scale = min(box_w / sw_, box_h / sh_)
+            sg = _cv2.resize(sg, (int(sw_ * scale), int(sh_ * scale)))
+            gh, gw = sg.shape[:2]
+            roi = img[y0:y0 + gh, x0:x0 + gw]
+            if sg.shape[2] == 4:
+                alpha = sg[:, :, 3:4].astype(float) / 255.0
+                roi[:] = (roi * (1 - alpha) + sg[:, :, :3] * alpha).astype(_np.uint8)
+            else:
+                # treat near-white as transparent
+                gray = _cv2.cvtColor(sg, _cv2.COLOR_BGR2GRAY)
+                mask = (gray < 235).astype(float)[:, :, None]
+                roi[:] = (roi * (1 - mask) + sg * mask).astype(_np.uint8)
+        except Exception:
+            pass
+    return {"image_base64": _encode_img(img)}
 
 
 # Include

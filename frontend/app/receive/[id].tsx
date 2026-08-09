@@ -136,43 +136,31 @@ export default function ReceiveFlow() {
             <Text style={s.title}>{doc.title}</Text>
             <Text style={s.meta}>From {doc.sender_name} ({doc.sender_email})</Text>
             <Text style={s.meta}>Category: {doc.category}</Text>
-            <View style={s.notice}>
-              <Ionicons name="lock-closed" size={16} color={theme.colors.brandSecondary} />
-              <Text style={s.noticeText}>This document is protected. Complete verification to sign.</Text>
-            </View>
-            <Text style={s.sectionLabel}>AGREEMENT</Text>
-            <View style={s.docBox}>
-              <Text style={s.docBody}>{doc.content}</Text>
-              <View style={s.sigBlock}>
-                <Text style={s.sigHeading}>SIGNATURES:</Text>
-                <View style={{ marginTop: 8 }}>
-                  <Text style={s.sigLabel}>Disclosing Party Signature:</Text>
-                  {senderSig ? <SignatureView data={senderSig} /> : <View style={s.emptyLine} />}
-                  <Text style={s.printedName}>Printed Name: {doc.sender_name}</Text>
-                  <Text style={s.printedName}>Date: {doc.sender_signed_at ? new Date(doc.sender_signed_at).toLocaleDateString() : new Date(doc.created_at).toLocaleDateString()}</Text>
-                </View>
-                <View style={{ marginTop: 14 }}>
-                  <Text style={s.sigLabel}>Receiving Party Signature:</Text>
-                  <View style={s.emptyLine} />
-                  <Text style={[s.printedName, { color: theme.colors.muted }]}>To be signed by you after verification</Text>
-                </View>
+            <Text style={s.meta}>Received: {new Date(doc.created_at).toLocaleDateString()}</Text>
+            {/* Locked gate — the document is NOT visible until verification is complete */}
+            <View style={s.lockCard} testID="locked-gate">
+              <View style={s.lockIconWrap}><Ionicons name="lock-closed" size={40} color={theme.colors.brand} /></View>
+              <Text style={s.lockTitle}>This {doc.category || 'document'} is locked</Text>
+              <Text style={s.lockSub}>
+                Complete the sender&apos;s security verification to view the document
+                {(doc.attached_files || []).length > 0 ? ` and its ${doc.attached_files.length} attached file${doc.attached_files.length > 1 ? 's' : ''}` : ''}.
+              </Text>
+              <View style={s.lockChips}>
+                {doc.security_config?.otp_verification && (
+                  <View style={s.lockChip}><Ionicons name="mail-outline" size={12} color={theme.colors.brand} /><Text style={s.lockChipText}>Email OTP</Text></View>
+                )}
+                {doc.security_config?.face_verification && (
+                  <View style={s.lockChip}><Ionicons name="person-circle-outline" size={12} color={theme.colors.brand} /><Text style={s.lockChipText}>Face check</Text></View>
+                )}
+                {doc.security_config?.voice_oath && (
+                  <View style={s.lockChip}><Ionicons name="mic-outline" size={12} color={theme.colors.brand} /><Text style={s.lockChipText}>Voice oath</Text></View>
+                )}
+                <View style={s.lockChip}><Ionicons name="create-outline" size={12} color={theme.colors.brand} /><Text style={s.lockChipText}>Signature</Text></View>
               </View>
             </View>
-            {(doc.attached_files || []).length > 0 && (
-              <>
-                <Text style={s.sectionLabel}>ATTACHED FILES</Text>
-                {doc.attached_files.map((f: any, i: number) => (
-                  <View key={i} style={s.attachRow}>
-                    <Ionicons name="document-attach" size={16} color={theme.colors.brand} />
-                    <Text style={s.attachName}>{f.name}</Text>
-                  </View>
-                ))}
-              </>
-            )}
-            <Text style={s.readMeta}>Reading progress: {readPct}%</Text>
             <Pressable testID="start-verify-btn" style={s.primaryBtn} onPress={nextAfterReview}>
-              <Ionicons name="shield-checkmark" size={16} color={theme.colors.onBrandPrimary} />
-              <Text style={s.primaryBtnText}>I&apos;ve read this — Begin Verification</Text>
+              <Ionicons name="lock-open-outline" size={16} color={theme.colors.onBrandPrimary} />
+              <Text style={s.primaryBtnText}>Unlock the {doc.category || 'document'}</Text>
             </Pressable>
           </>
         )}
@@ -246,12 +234,24 @@ export default function ReceiveFlow() {
             <Text style={s.subtitle}>Review your placement, then apply your signature.</Text>
             <View style={s.docBox}>
               <Text style={s.docBody}>{doc.content}</Text>
+              {(doc.attached_files || []).length > 0 && (
+                <View style={{ marginTop: 16 }}>
+                  <Text style={s.sigHeading}>ATTACHED MATERIALS:</Text>
+                  {doc.attached_files.map((f: any, i: number) => (
+                    <View key={i} style={s.attachRow}>
+                      <Ionicons name="document-attach" size={16} color={theme.colors.brand} />
+                      <Text style={s.attachName}>{f.name}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
               <View style={s.sigBlock}>
                 <Text style={s.sigHeading}>SIGNATURES:</Text>
                 <View style={{ marginTop: 8 }}>
                   <Text style={s.sigLabel}>Disclosing Party Signature:</Text>
                   {senderSig ? <SignatureView data={senderSig} /> : <View style={s.emptyLine} />}
                   <Text style={s.printedName}>Printed Name: {doc.sender_name}</Text>
+                  <Text style={s.printedName}>Date: {new Date(doc.sender_signed_at || doc.created_at).toLocaleDateString()}</Text>
                 </View>
                 <View style={{ marginTop: 14 }}>
                   <Text style={s.sigLabel}>Receiving Party Signature:</Text>
@@ -301,8 +301,20 @@ export default function ReceiveFlow() {
                   <Text style={s.sigLabel}>Receiving Party:</Text>
                   {receiverSig ? <SignatureView data={receiverSig} /> : <View style={s.emptyLine} />}
                   <Text style={s.printedName}>{doc.recipient_email}</Text>
+                  {!!doc.signed_at && <Text style={s.printedName}>Date: {new Date(doc.signed_at).toLocaleDateString()}</Text>}
                 </View>
               </View>
+              {(doc.attached_files || []).length > 0 && (
+                <View style={{ marginTop: 16 }}>
+                  <Text style={s.sigHeading}>ATTACHED MATERIALS:</Text>
+                  {doc.attached_files.map((f: any, i: number) => (
+                    <View key={i} style={s.attachRow}>
+                      <Ionicons name="document-attach" size={16} color={theme.colors.brand} />
+                      <Text style={s.attachName}>{f.name}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
             <Pressable testID="back-home-btn" style={s.primaryBtn} onPress={() => router.replace('/(tabs)')}>
               <Text style={s.primaryBtnText}>Back to Home</Text>
@@ -332,6 +344,13 @@ const s = StyleSheet.create({
   subtitle: { color: theme.colors.muted, marginTop: 8, lineHeight: 20 },
   meta: { color: theme.colors.muted, fontSize: 13, marginTop: 4 },
   notice: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#FBE6DC', borderRadius: 12, padding: 12, marginTop: 16 },
+  lockCard: { alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: theme.colors.border, padding: 28, marginTop: 24 },
+  lockIconWrap: { width: 74, height: 74, borderRadius: 37, backgroundColor: theme.colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  lockTitle: { color: theme.colors.brand, fontSize: 17, fontWeight: '600', textAlign: 'center' },
+  lockSub: { color: theme.colors.muted, fontSize: 13, textAlign: 'center', lineHeight: 19 },
+  lockChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 10 },
+  lockChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
+  lockChipText: { color: theme.colors.brand, fontSize: 11.5, fontWeight: '500' },
   noticeText: { flex: 1, color: theme.colors.brandSecondary, fontSize: 12, lineHeight: 16 },
   sectionLabel: { color: theme.colors.muted, fontSize: 11, letterSpacing: 1, marginTop: 28, marginBottom: 10 },
   docBox: { backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: theme.colors.border, marginTop: 10 },

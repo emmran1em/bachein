@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
 import { api } from '@/src/api';
+import TemplatePicker from '@/src/components/TemplatePicker';
 
 const SUBTYPES = ['Question Paper', 'Report', 'Notes', 'Presentation', 'Assignment', 'Summary'];
 
@@ -13,6 +14,7 @@ export default function NormalCreate() {
   const { category } = useLocalSearchParams<{ category: string }>();
   const [prompt, setPrompt] = useState('');
   const [subType, setSubType] = useState('Report');
+  const [template, setTemplate] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ title: string; content: string; cover_page: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -21,7 +23,7 @@ export default function NormalCreate() {
   const generate = async () => {
     setErr(''); setLoading(true);
     try {
-      const r: any = await api.generate({ prompt, category: category || 'Normal PDF', sub_type: subType });
+      const r: any = await api.generate({ prompt, category: category || 'Normal PDF', sub_type: subType, template: template || undefined });
       setResult(r);
     } catch (e: any) {
       setErr(e.message || 'Generation failed');
@@ -80,6 +82,8 @@ export default function NormalCreate() {
             multiline
             numberOfLines={5}
           />
+
+          <TemplatePicker category={category} selected={template} onSelect={setTemplate} />
 
           {err ? <Text style={s.err}>{err}</Text> : null}
 

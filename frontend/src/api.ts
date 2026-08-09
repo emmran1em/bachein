@@ -76,7 +76,7 @@ export const api = {
   magicConsume: (token: string) =>
     request('/auth/magic/consume', { method: 'POST', body: JSON.stringify({ token }) }),
   categories: () => request('/categories'),
-  generate: (body: { prompt: string; category: string; sub_type?: string }) =>
+  generate: (body: { prompt: string; category: string; sub_type?: string; template?: string }) =>
     request('/ai/generate', { method: 'POST', body: JSON.stringify(body) }),
   review: (document_text: string) =>
     request('/ai/review', { method: 'POST', body: JSON.stringify({ document_text }) }),
@@ -180,6 +180,12 @@ export const api = {
     request('/scanner/apply', { method: 'POST', body: JSON.stringify(body) }),
   signApply: (body: { session_id: string; page_index: number; x: number; y: number; w: number; signature: any }) =>
     request('/file-tools/sign-apply', { method: 'POST', body: JSON.stringify(body) }),
+  pdfPages: (pdf_base64: string) =>
+    request('/pdf/pages', { method: 'POST', body: JSON.stringify({ pdf_base64 }) }),
+  scannerAnnotate: (body: { image_base64: string; strokes: number[][][]; color?: string; width?: number }) =>
+    request('/scanner/annotate', { method: 'POST', body: JSON.stringify(body) }),
+  scannerSignImage: (body: { image_base64: string; signature: any; x: number; y: number; w: number }) =>
+    request('/scanner/sign-image', { method: 'POST', body: JSON.stringify(body) }),
   scannerCreatePdf: (images: string[], name?: string) =>
     request('/scanner/create-pdf', { method: 'POST', body: JSON.stringify({ images, name }) }),
   editorInvite: (body: { document_id: string; email: string; permission: string }) =>
