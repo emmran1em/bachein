@@ -1,6 +1,7 @@
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View, StyleSheet, Pressable, Text, Platform } from 'react-native';
+import { View, StyleSheet, Pressable, Text, Platform, Keyboard } from 'react-native';
+import { useEffect, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '@/src/theme';
 import BacheinAiLogo from '@/src/components/BacheinAiLogo';
@@ -17,7 +18,16 @@ const TABS = [
 function FloatingDock({ state, navigation }: any) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const [kbVisible, setKbVisible] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const a = Keyboard.addListener(showEvt, () => setKbVisible(true));
+    const b = Keyboard.addListener(hideEvt, () => setKbVisible(false));
+    return () => { a.remove(); b.remove(); };
+  }, []);
   const visible = ['index', 'received', '__create', 'filekit', 'chat'];
+  if (kbVisible) return null; // never overlap the keyboard / composer
   return (
     <View style={[s.dockWrap, { paddingBottom: Math.max(insets.bottom, 12) }]} pointerEvents="box-none">
       <View style={s.dock}>

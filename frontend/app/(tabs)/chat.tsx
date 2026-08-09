@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Platform, ActivityIndicator, Modal, FlatList, Keyboard } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -55,6 +56,14 @@ export default function AiWorkspace() {
   const [renameValue, setRenameValue] = useState('');
   const scrollRef = useRef<ScrollView>(null);
   const recogRef = useRef<any>(null);
+  const [kbOpen, setKbOpen] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const a = Keyboard.addListener(showEvt, () => { setKbOpen(true); setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80); });
+    const b = Keyboard.addListener(hideEvt, () => setKbOpen(false));
+    return () => { a.remove(); b.remove(); };
+  }, []);
 
   // Date grouping for chat history
   const formatRelative = (iso: string) => {
@@ -261,7 +270,7 @@ export default function AiWorkspace() {
         </Pressable>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={12} style={{ flex: 1 }}>
         <ScrollView
           ref={scrollRef}
           contentContainerStyle={[{ paddingBottom: 200, flexGrow: 1 }, messages.length === 0 && s.centerContent]}
@@ -329,7 +338,7 @@ export default function AiWorkspace() {
         </ScrollView>
 
         {/* Composer — Manus-style: single rounded card with inline model selector + mic + send */}
-        <View style={s.composerWrap}>
+        <View style={[s.composerWrap, { paddingBottom: kbOpen ? 10 : 104 }]}>
           <View style={s.composerCard}>
             <TextInput
               testID="ai-input"

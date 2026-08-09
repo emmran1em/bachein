@@ -1823,6 +1823,247 @@ async def ocr_extract(req: OcrRequest, user=Depends(get_current_user)):
     return result
 
 
+# ══════════════ Pro Scanner — fast detect + apply (crop/filter/rotate) ══════════════
+def _decode_img(image_base64: str):
+    import numpy as _np
+    import cv2 as _cv2
+    import base64 as _b64
+    arr = _np.frombuffer(_b64.b64decode(image_base64), dtype=_np.uint8)
+    img = _cv2.imdecode(arr, _cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(400, "Could not read image")
+    return img
+
+
+def _encode_img(img, quality=82) -> str:
+    import cv2 as _cv2
+    import base64 as _b64
+    ok, enc = _cv2.imencode(".jpg", img, [_cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise HTTPException(500, "Encoding failed")
+    return _b64.b64encode(enc.tobytes()).decode()
+
+
+def _detect_quad(img):
+    """Return ordered corners [tl,tr,br,bl] in pixel coords, or None."""
+    import numpy as _np
+    import cv2 as _cv2
+    h, w = img.shape[:2]
+    scale = 700.0 / max(h, w)
+    small = _cv2.resize(img, (int(w * scale), int(h * scale)))
+    gray = _cv2.cvtColor(small, _cv2.COLOR_BGR2GRAY)
+    gray = _cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = _cv2.Canny(gray, 50, 150)
+    edges = _cv2.dilate(edges, _np.ones((3, 3), _np.uint8), iterations=2)
+    cnts, _ = _cv2.findContours(edges, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in sorted(cnts, key=_cv2.contourArea, reverse=True)[:5]:
+        peri = _cv2.arcLength(cnt, True)
+        approx = _cv2.approxPolyDP(cnt, 0.02 * peri, True)
+        if len(approx) == 4 and _cv2.contourArea(approx) > 0.2 * small.shape[0] * small.shape[1]:
+            pts = (approx.reshape(4, 2) / scale).astype("float32")
+            s = pts.sum(axis=1)
+            d = _np.diff(pts, axis=1).flatten()
+            tl, br = pts[_np.argmin(s)], pts[_np.argmax(s)]
+            tr, bl = pts[_np.argmin(d)], pts[_np.argmax(d)]
+            return _np.array([tl, tr, br, bl], dtype="float32")
+    return None
+
+
+def _warp_quad(img, quad):
+    import numpy as _np
+    import cv2 as _cv2
+    tl, tr, br, bl = quad
+    wA = _np.linalg.norm(br - bl); wB = _np.linalg.norm(tr - tl)
+    hA = _np.linalg.norm(tr - br); hB = _np.linalg.norm(tl - bl)
+    mw, mh = int(max(wA, wB)), int(max(hA, hB))
+    if mw < 60 or mh < 60:
+        return img
+    M = _cv2.getPerspectiveTransform(
+        quad, _np.array([[0, 0], [mw - 1, 0], [mw - 1, mh - 1], [0, mh - 1]], dtype="float32"))
+    return _cv2.warpPerspective(img, M, (mw, mh))
+
+
+def _apply_filter(img, filt: str):
+    import cv2 as _cv2
+    if filt == "bw":
+        g = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+        g = _cv2.adaptiveThreshold(g, 255, _cv2.ADAPTIVE_THRESH_GAUSSIAN_C, _cv2.THRESH_BINARY, 21, 10)
+        return _cv2.cvtColor(g, _cv2.COLOR_GRAY2BGR)
+    if filt == "color":
+        lab = _cv2.cvtColor(img, _cv2.COLOR_BGR2LAB)
+        l, a, b = _cv2.split(lab)
+        l = _cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
+        return _cv2.cvtColor(_cv2.merge((l, a, b)), _cv2.COLOR_LAB2BGR)
+    return img  # original
+
+
+class ScanDetectRequest(BaseModel):
+    image_base64: str
+
+
+@api.post("/scanner/detect")
+async def scanner_detect(req: ScanDetectRequest, user=Depends(get_current_user)):
+    """Fast document-corner detection. Returns normalized corners [tl,tr,br,bl]."""
+    img = _decode_img(req.image_base64)
+    h, w = img.shape[:2]
+    quad = None
+    try:
+        quad = _detect_quad(img)
+    except Exception:
+        quad = None
+    if quad is None:
+        return {"found": False, "corners": [[0.04, 0.04], [0.96, 0.04], [0.96, 0.96], [0.04, 0.96]], "width": w, "height": h}
+    corners = [[float(x) / w, float(y) / h] for x, y in quad]
+    return {"found": True, "corners": corners, "width": w, "height": h}
+
+
+class ScanApplyRequest(BaseModel):
+    image_base64: str
+    corners: Optional[List[List[float]]] = None  # normalized [tl,tr,br,bl]
+    filter: str = "color"  # original | color | bw
+    rotate: int = 0
+
+
+@api.post("/scanner/apply")
+async def scanner_apply(req: ScanApplyRequest, user=Depends(get_current_user)):
+    """Apply crop (given/auto corners) + perspective correction + filter + rotation."""
+    import numpy as _np
+    import cv2 as _cv2
+    img = _decode_img(req.image_base64)
+    h, w = img.shape[:2]
+    found = False
+    try:
+        if req.corners and len(req.corners) == 4:
+            quad = _np.array([[c[0] * w, c[1] * h] for c in req.corners], dtype="float32")
+            img = _warp_quad(img, quad)
+            found = True
+        else:
+            quad = _detect_quad(img)
+            if quad is not None:
+                img = _warp_quad(img, quad)
+                found = True
+    except Exception:
+        pass
+    try:
+        img = _apply_filter(img, req.filter)
+    except Exception:
+        pass
+    if req.rotate in (90, 180, 270):
+        rot_map = {90: _cv2.ROTATE_90_CLOCKWISE, 180: _cv2.ROTATE_180, 270: _cv2.ROTATE_90_COUNTERCLOCKWISE}
+        img = _cv2.rotate(img, rot_map[req.rotate])
+    return {"image_base64": _encode_img(img), "found_document": found}
+
+
+# ══════════════ File Kit — Sign a PDF (embed signature at chosen spot) ══════════════
+def _paint_signature(page, sig: dict, rect):
+    """Draw a signature (draw/type/upload) inside rect on a fitz page — no border/labels."""
+    import base64 as _b64
+    import re as _re
+    import fitz as _fitz
+    x, y = rect.x0, rect.y0
+    BOX_W, BOX_H = rect.width, rect.height
+    mode = sig.get("mode")
+    if mode == "draw" and sig.get("paths"):
+        pts_all, strokes = [], []
+        for p in sig["paths"]:
+            pts = [(float(a), float(b)) for a, b in _re.findall(r"[ML]?\s*(-?[\d.]+),(-?[\d.]+)", p)]
+            if pts:
+                strokes.append(pts)
+                pts_all.extend(pts)
+        if pts_all:
+            xs = [p[0] for p in pts_all]; ys = [p[1] for p in pts_all]
+            minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+            sw = max(1.0, maxx - minx); sh = max(1.0, maxy - miny)
+            scale = min(BOX_W / sw, BOX_H / sh)
+            ox = x + (BOX_W - sw * scale) / 2
+            oy = y + (BOX_H - sh * scale) / 2
+            for pts in strokes:
+                for i in range(len(pts) - 1):
+                    p1 = (ox + (pts[i][0] - minx) * scale, oy + (pts[i][1] - miny) * scale)
+                    p2 = (ox + (pts[i + 1][0] - minx) * scale, oy + (pts[i + 1][1] - miny) * scale)
+                    page.draw_line(p1, p2, color=(0.1, 0.12, 0.35), width=max(1.0, BOX_H / 55))
+    elif mode == "type" and sig.get("text"):
+        fs = min(26.0, BOX_H * 0.55)
+        page.insert_text((x + 4, y + BOX_H / 2 + fs / 3), sig["text"][:40], fontsize=fs, fontname="tiit", color=(0.1, 0.12, 0.35))
+    elif mode == "upload" and sig.get("image_b64"):
+        raw = sig["image_b64"]
+        if "," in raw[:80]:
+            raw = raw.split(",", 1)[1]
+        page.insert_image(_fitz.Rect(x, y, x + BOX_W, y + BOX_H), stream=_b64.b64decode(raw), keep_proportion=True)
+
+
+@api.post("/file-tools/sign-prepare")
+async def sign_prepare(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Upload a PDF for signing — returns a signing session id + page previews."""
+    data = await file.read()
+    import fitz
+    import base64 as _b64
+    try:
+        pdf = fitz.open(stream=data, filetype="pdf")
+        if pdf.needs_pass:
+            raise HTTPException(400, "This PDF is password-protected — unlock it first")
+        pages = []
+        for pg in list(pdf)[:12]:
+            pix = pg.get_pixmap(dpi=90)
+            pages.append({
+                "image_base64": _b64.b64encode(pix.tobytes("jpeg")).decode(),
+                "width": pg.rect.width, "height": pg.rect.height,
+            })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Could not read PDF: {e}")
+    sid = str(uuid.uuid4())
+    await db.signing_sessions.insert_one({
+        "id": sid, "user_id": user["id"], "filename": file.filename or "document.pdf",
+        "pdf_b64": _b64.b64encode(data).decode(), "created_at": now_iso(),
+    })
+    return {"session_id": sid, "pages": pages, "total_pages": pdf.page_count}
+
+
+class SignApplyRequest(BaseModel):
+    session_id: str
+    page_index: int
+    x: float  # normalized 0-1 (left of signature box)
+    y: float  # normalized 0-1 (top of signature box)
+    w: float  # normalized width of signature box
+    signature: Dict[str, Any]  # {mode, paths|text|image_b64}
+
+
+@api.post("/file-tools/sign-apply")
+async def sign_apply(req: SignApplyRequest, user=Depends(get_current_user)):
+    """Embed the signature into the uploaded PDF at the chosen position."""
+    import fitz
+    import base64 as _b64
+    sess = await db.signing_sessions.find_one({"id": req.session_id, "user_id": user["id"]})
+    if not sess:
+        raise HTTPException(404, "Signing session not found — upload the PDF again")
+    pdf = fitz.open(stream=_b64.b64decode(sess["pdf_b64"]), filetype="pdf")
+    if req.page_index < 0 or req.page_index >= pdf.page_count:
+        raise HTTPException(400, "Bad page number")
+    page = pdf[req.page_index]
+    pw, ph = page.rect.width, page.rect.height
+    box_w = max(40.0, min(req.w, 0.9) * pw)
+    box_h = box_w * 0.38
+    x0 = min(max(req.x, 0.0), 1.0) * pw
+    y0 = min(max(req.y, 0.0), 1.0) * ph
+    x0 = min(x0, pw - box_w - 4)
+    y0 = min(y0, ph - box_h - 4)
+    try:
+        _paint_signature(page, req.signature or {}, fitz.Rect(x0, y0, x0 + box_w, y0 + box_h))
+    except Exception as e:
+        raise HTTPException(400, f"Could not draw signature: {e}")
+    out = pdf.tobytes()
+    base = (sess.get("filename") or "document.pdf").rsplit(".", 1)[0]
+    dl = {
+        "id": str(uuid.uuid4()), "user_id": user["id"], "name": f"signed-{base}"[:90], "kind": "signed-pdf",
+        "ref_id": "", "size": len(out), "pdf_b64": _b64.b64encode(out).decode(), "created_at": now_iso(),
+    }
+    await db.downloads.insert_one(dict(dl))
+    await db.signing_sessions.delete_one({"id": req.session_id})
+    return {"download_id": dl["id"], "name": dl["name"], "size": len(out)}
+
+
 # Include
 app.include_router(api)
 

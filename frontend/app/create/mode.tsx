@@ -1,14 +1,15 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Image } from 'react-native';
+import { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
 import { api, uploadFile } from '@/src/api';
 import { useToast } from '@/src/components/Toast';
 import { playSent } from '@/src/lib/sound';
+import { scanStore } from '@/src/lib/scanStore';
 
 export default function CreateMode() {
   const router = useRouter();
@@ -28,31 +29,34 @@ export default function CreateMode() {
     router.replace({ pathname: '/editor', params: {} as any });
   };
 
-  const takePhoto = async () => {
-    try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) { toast.show('Camera permission required', 'error'); return; }
-      const res = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: false, base64: true });
-      if (res.canceled) return;
-      const a = res.assets[0];
-      let uri = a.uri;
-      // Scanner pipeline: edge detection + perspective correction + enhancement
-      if (a.base64) {
-        try {
-          const p: any = await api.scannerProcess(a.base64, 'color');
-          if (Platform.OS === 'web') {
-            uri = `data:image/jpeg;base64,${p.image_base64}`;
-          } else {
-            const dest = `${FileSystem.cacheDirectory}scan-${Date.now()}.jpg`;
-            await FileSystem.writeAsStringAsync(dest, p.image_base64, { encoding: 'base64' as any });
+  // Professional scanner flow: capture → edge detect → review/crop → pages come back here
+  const takePhoto = () => {
+    router.push('/scanner?return=create');
+  };
+
+  // Consume pages handed back by the scanner
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const pages = scanStore.consume();
+        if (!pages.length) return;
+        const items: { name: string; uri: string; mime: string }[] = [];
+        for (const b64 of pages) {
+          let uri = `data:image/jpeg;base64,${b64}`;
+          if (Platform.OS !== 'web') {
+            const dest = `${FileSystem.cacheDirectory}scan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+            await FileSystem.writeAsStringAsync(dest, b64, { encoding: 'base64' as any });
             uri = dest;
           }
-          toast.show(p.found_document ? 'Document detected & straightened ✓' : 'Captured ✓', 'success');
-        } catch {}
-      }
-      setCaptured((c) => [...c, { name: `scan-${Date.now()}.jpg`, uri, mime: 'image/jpeg' }]);
-    } catch (e: any) { toast.show(e.message, 'error'); }
-  };
+          items.push({ name: `scan-${Date.now()}.jpg`, uri, mime: 'image/jpeg' });
+        }
+        setCaptured((c) => [...c, ...items]);
+        setShowUpload(true);
+        toast.show(`${items.length} scanned page${items.length > 1 ? 's' : ''} added ✓`, 'success');
+      })();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+  );
 
   const pickFromGallery = async () => {
     try {

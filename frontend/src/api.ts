@@ -174,6 +174,12 @@ export const api = {
   // ─── Scanner (Phase 11) ───
   scannerProcess: (image_base64: string, mode = 'color', rotate = 0) =>
     request('/scanner/process', { method: 'POST', body: JSON.stringify({ image_base64, mode, rotate }) }),
+  scannerDetect: (image_base64: string) =>
+    request('/scanner/detect', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
+  scannerApply: (body: { image_base64: string; corners?: number[][]; filter?: string; rotate?: number }) =>
+    request('/scanner/apply', { method: 'POST', body: JSON.stringify(body) }),
+  signApply: (body: { session_id: string; page_index: number; x: number; y: number; w: number; signature: any }) =>
+    request('/file-tools/sign-apply', { method: 'POST', body: JSON.stringify(body) }),
   scannerCreatePdf: (images: string[], name?: string) =>
     request('/scanner/create-pdf', { method: 'POST', body: JSON.stringify({ images, name }) }),
   editorInvite: (body: { document_id: string; email: string; permission: string }) =>
@@ -207,6 +213,33 @@ export async function uploadFile(file: { uri: string; name: string; type: string
     throw new Error(txt);
   }
   return res.json();
+}
+
+/** Multipart upload to any endpoint that returns JSON (e.g. /file-tools/sign-prepare). */
+export async function uploadForm(endpoint: string, file: { uri: string; name: string; type: string }, extraFields: Record<string, string> = {}): Promise<any> {
+  const token = await getToken();
+  const form = new FormData();
+  for (const [k, v] of Object.entries(extraFields)) form.append(k, v);
+  const isWeb = typeof document !== 'undefined';
+  if (isWeb) {
+    const fetched = await fetch(file.uri);
+    const blob = await fetched.blob();
+    const asFile: any = (typeof File !== 'undefined')
+      ? new File([blob], file.name, { type: file.type || blob.type || 'application/octet-stream' })
+      : blob;
+    form.append('file', asFile, file.name);
+  } else {
+    // @ts-ignore RN FormData
+    form.append('file', { uri: file.uri, name: file.name, type: file.type });
+  }
+  const res = await fetch(`${API}${endpoint}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form as any,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.detail || `Upload failed (${res.status})`);
+  return data;
 }
 
 export async function fileToolUpload(endpoint: string, file: { uri: string; name: string; type: string }, extraFields: Record<string, string> = {}): Promise<{ blobUri: string; base64?: string; headers: any; filename: string; contentType: string }> {

@@ -6,6 +6,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import { theme } from '@/src/theme';
 import { api, fileToolUpload } from '@/src/api';
 
@@ -14,6 +15,7 @@ type Tool = 'menu' | 'image-compress' | 'pdf-compress' | 'convert' | 'downloads'
 type DlItem = { filename: string; ts: string; original?: number; compressed?: number; localPath?: string; contentType: string };
 
 export default function FileKit() {
+  const router = useRouter();
   const [tool, setTool] = useState<Tool>('menu');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -184,6 +186,14 @@ export default function FileKit() {
             </View>
             <Ionicons name="chevron-forward" size={18} color={theme.colors.muted} />
           </Pressable>
+          <Pressable testID="tool-sign" style={s.toolCard} onPress={() => router.push('/sign-pdf')}>
+            <View style={[s.iconBox, { backgroundColor: '#EEF7F0' }]}><Ionicons name="create" size={22} color="#15803d" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.toolTitle}>Sign Document</Text>
+              <Text style={s.toolDesc}>Place your signature anywhere in a PDF — embedded</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={theme.colors.muted} />
+          </Pressable>
           <Pressable testID="tool-protect" style={s.toolCard} onPress={() => { setPassword(''); setTool('protect'); }}>
             <View style={[s.iconBox, { backgroundColor: '#E8ECF7' }]}><Ionicons name="lock-closed" size={22} color="#3b5bdb" /></View>
             <View style={{ flex: 1 }}>
@@ -205,14 +215,16 @@ export default function FileKit() {
         <Modal visible={showMenu} transparent animationType="fade" onRequestClose={closeMenu}>
           <Pressable style={s.modalOverlay} onPress={closeMenu} testID="menu-overlay">
             <View style={s.menuSheet}>
-              <Pressable testID="menu-downloads" style={s.menuItem} onPress={() => { closeMenu(); setTool('downloads'); }}>
-                <Ionicons name="cloud-download-outline" size={18} color={theme.colors.brand} />
-                <Text style={s.menuText}>Downloads ({downloads.length})</Text>
-              </Pressable>
-              <Pressable testID="menu-clear" style={s.menuItem} onPress={async () => { closeMenu(); await AsyncStorage.removeItem('bachein_downloads'); setDownloads([]); }}>
-                <Ionicons name="trash-outline" size={18} color={theme.colors.error} />
-                <Text style={[s.menuText, { color: theme.colors.error }]}>Clear history</Text>
-              </Pressable>
+              <ScrollView style={{ maxHeight: 420 }} bounces={false}>
+                <Pressable testID="menu-downloads" style={s.menuItem} onPress={() => { closeMenu(); setTool('downloads'); }}>
+                  <Ionicons name="cloud-download-outline" size={18} color={theme.colors.brand} />
+                  <Text style={s.menuText}>Downloads ({downloads.length})</Text>
+                </Pressable>
+                <Pressable testID="menu-clear" style={s.menuItem} onPress={async () => { closeMenu(); await AsyncStorage.removeItem('bachein_downloads'); setDownloads([]); }}>
+                  <Ionicons name="trash-outline" size={18} color={theme.colors.error} />
+                  <Text style={[s.menuText, { color: theme.colors.error }]}>Clear history</Text>
+                </Pressable>
+              </ScrollView>
             </View>
           </Pressable>
         </Modal>
