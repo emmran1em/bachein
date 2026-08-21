@@ -853,6 +853,17 @@ async def voice_oath_azure_token(user=Depends(get_current_user)):
         raise HTTPException(500, f"Azure token error: {e}")
 
 
+@api.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str, user=Depends(get_current_user)):
+    doc = await db.documents.find_one({"id": doc_id})
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if doc.get("sender_id") != user["id"]:
+        raise HTTPException(403, "Only the sender can delete this document")
+    await db.documents.delete_one({"id": doc_id})
+    return {"deleted": True}
+
+
 @api.get("/documents/{doc_id}", response_model=DocumentOut)
 async def get_document(doc_id: str, user=Depends(get_current_user)):
     doc = await db.documents.find_one({"id": doc_id}, {"_id": 0, "otp_code": 0, "audit_log": 0})
@@ -2203,6 +2214,91 @@ async def scanner_sign_image(req: SignImageRequest, user=Depends(get_current_use
         except Exception:
             pass
     return {"image_base64": _encode_img(img)}
+
+
+# ══════════════ Import an uploaded file into Downloads (as PDF) ══════════════
+class DownloadImportRequest(BaseModel):
+    name: str
+    file_base64: str
+    mime: str = "application/pdf"
+
+
+@api.post("/downloads/import")
+async def downloads_import(req: DownloadImportRequest, user=Depends(get_current_user)):
+    """Store an uploaded file in Downloads. Images are converted to a one-page PDF."""
+    import fitz
+    import base64 as _b64
+    raw = _b64.b64decode(req.file_base64)
+    if req.mime.startswith("image/"):
+        pdf = fitz.open()
+        img = fitz.open(stream=raw, filetype="image")
+        rect = img[0].rect
+        page = pdf.new_page(width=rect.width, height=rect.height)
+        page.insert_image(rect, stream=raw)
+        raw = pdf.tobytes()
+    elif not raw[:4] == b"%PDF":
+        # docx/txt etc — wrap the filename note; only PDFs/images supported for direct import
+        raise HTTPException(400, "Only PDF and image files can be saved to Downloads")
+    base = req.name.rsplit(".", 1)[0][:90] or "document"
+    dl = {
+        "id": str(uuid.uuid4()), "user_id": user["id"], "name": base, "kind": "upload",
+        "ref_id": "", "size": len(raw), "pdf_b64": _b64.b64encode(raw).decode(), "created_at": now_iso(),
+    }
+    await db.downloads.insert_one(dict(dl))
+    return {"download_id": dl["id"], "name": base, "size": len(raw)}
+
+
+# ══════════════ Viewer — circle a word → AI explains it ══════════════
+class ViewerExplainRequest(BaseModel):
+    image_base64: str          # current page image
+    bbox: List[float]          # [x0, y0, x1, y1] normalized to the page image
+
+
+@api.post("/viewer/explain")
+async def viewer_explain(req: ViewerExplainRequest, user=Depends(get_current_user)):
+    """Crop the circled region of a PDF page and explain the word/phrase inside it."""
+    from PIL import Image as _PImage
+    import io as _io
+    import base64 as _b64
+    try:
+        raw = _b64.b64decode(req.image_base64)
+        img = _PImage.open(_io.BytesIO(raw)).convert("RGB")
+        w, h = img.size
+        x0, y0, x1, y1 = req.bbox
+        pad = 0.02
+        box = (
+            int(max(0.0, min(x0, x1) - pad) * w), int(max(0.0, min(y0, y1) - pad) * h),
+            int(min(1.0, max(x0, x1) + pad) * w), int(min(1.0, max(y0, y1) + pad) * h),
+        )
+        if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+            raise HTTPException(400, "Selection too small")
+        crop = img.crop(box)
+        buf = _io.BytesIO()
+        crop.save(buf, "JPEG", quality=88)
+        crop_b64 = _b64.b64encode(buf.getvalue()).decode()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(400, "Could not read selection")
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    chat = LlmChat(
+        api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
+        session_id=f"explain-{user['id'][:8]}",
+        system_message=(
+            "You are Bachein's reading assistant. The user circled a word or phrase in a document. "
+            "Read the text in the image and explain it simply: meaning, plain-language definition, and one example sentence. "
+            "If it's a term/formula, explain what it means in context. Keep it under 120 words. "
+            "Start with the detected word/phrase in bold."
+        ),
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+    try:
+        answer = await chat.send_message(UserMessage(
+            text="Explain the circled word/phrase in this image.",
+            file_contents=[ImageContent(image_base64=crop_b64)],
+        )) or ""
+    except Exception as e:
+        raise HTTPException(502, f"Explain failed: {e}")
+    return {"explanation": answer.strip(), "disclaimer": "AI can make mistake, please check important info."}
 
 
 # Include

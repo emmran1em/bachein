@@ -1,11 +1,13 @@
 import { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Modal, TextInput, Image, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
-import { api, getUser, clearAuth } from '@/src/api';
-import { AiAvatar, BacheinLogo } from '@/src/components/Logo';
+import { api, getUser, clearAuth, API_BASE } from '@/src/api';
+import { sharePdf } from '@/src/share';
+import { BacheinLogo } from '@/src/components/Logo';
+import VoiceScreen from '../voice';
 
 function Section({ title, action, onAction, children, testID }: any) {
   return (
@@ -29,6 +31,8 @@ export default function Home() {
   const [drawer, setDrawer] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pdf' | 'doc' | 'nda'>('all');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [docAction, setDocAction] = useState<any>(null);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [query, setQuery] = useState('');
 
   const load = async () => {
@@ -46,8 +50,7 @@ export default function Home() {
     if (filter === 'nda') {
       if ((d.category || '').toUpperCase() !== 'NDA') return false;
     } else if (filter === 'pdf') {
-      const hasPdf = (d.attached_files || []).some((f: any) => (f.name || '').toLowerCase().endsWith('.pdf') || (f.type || '').includes('pdf'));
-      if (!hasPdf && (d.category || '').toUpperCase() !== 'PDF') return false;
+      // Every Bachein document is delivered as a PDF (incl. NDAs) — show all
     } else if (filter === 'doc') {
       const hasDoc = (d.attached_files || []).some((f: any) => /\.docx?$/.test((f.name || '').toLowerCase()) || (f.type || '').includes('word') || (f.type || '').includes('officedocument'));
       if (!hasDoc && (d.category || '').toUpperCase() !== 'DOC') return false;
@@ -87,8 +90,8 @@ export default function Home() {
           <Pressable testID="home-search" style={ss.iconBtn} onPress={() => setSearchOpen((v) => !v)}>
             <Ionicons name={searchOpen ? 'close' : 'search'} size={20} color={theme.colors.brand} />
           </Pressable>
-          <Pressable testID="home-ai" style={ss.aiCard} onPress={() => router.push('/(tabs)/chat')}>
-            <AiAvatar size={32} />
+          <Pressable testID="home-voice-orb" style={ss.orbBtn} onPress={() => setVoiceOpen(true)}>
+            <Image source={require('../../assets/images/voice-orb.png')} style={{ width: 40, height: 40, borderRadius: 20 }} />
           </Pressable>
         </View>
 
@@ -170,7 +173,7 @@ export default function Home() {
             {recentEdited.length > 0 && (
               <Section title="Your documents" action="See all" onAction={() => router.push('/(tabs)/received')} testID="section-sent">
                 {recentEdited.map((d: any) => (
-                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} />
+                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} onLongPress={() => setDocAction(d)} />
                 ))}
               </Section>
             )}
@@ -178,7 +181,7 @@ export default function Home() {
             {pending.length > 0 && (
               <Section title="Pending signatures" testID="section-pending">
                 {pending.map((d: any) => (
-                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} />
+                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} onLongPress={() => setDocAction(d)} />
                 ))}
               </Section>
             )}
@@ -186,7 +189,7 @@ export default function Home() {
             {signed.length > 0 && (
               <Section title="Recently signed" action="Open Vault" onAction={() => router.push('/(tabs)/vault')} testID="section-signed">
                 {signed.map((d: any) => (
-                  <RowCard key={d.id} item={d} kind="signed" onPress={() => router.push(`/document/${d.id}`)} />
+                  <RowCard key={d.id} item={d} kind="signed" onPress={() => router.push(`/document/${d.id}`)} onLongPress={() => setDocAction(d)} />
                 ))}
               </Section>
             )}
@@ -218,8 +221,9 @@ export default function Home() {
       </ScrollView>
 
       <Modal visible={drawer} transparent animationType="fade" onRequestClose={() => setDrawer(false)}>
-        <Pressable style={ss.drawerOverlay} onPress={() => setDrawer(false)} testID="drawer-overlay">
-          <Pressable style={ss.drawer} onPress={(e) => e.stopPropagation?.()}>
+        <View style={{ flex: 1 }}>
+          <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} onPress={() => setDrawer(false)} testID="drawer-overlay" />
+          <View style={ss.drawer}>
             <View style={ss.drawerHead}>
               <View style={ss.drawerAvatar}><Text style={ss.drawerAvatarTxt}>{(user?.name || '?').slice(0, 1).toUpperCase()}</Text></View>
               <View style={{ flex: 1 }}>
@@ -227,7 +231,7 @@ export default function Home() {
                 <Text style={ss.drawerEmail}>{user?.email || '—'}</Text>
               </View>
             </View>
-            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
+            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator contentContainerStyle={{ paddingBottom: 40 }} testID="drawer-scroll">
             <DrawerItem icon="home-outline" label="Home" onPress={() => setDrawer(false)} testID="drawer-home" />
             <DrawerItem icon="add-circle-outline" label="Create Document" onPress={() => goTo('/create')} testID="drawer-create" />
             <DrawerItem icon="create-outline" label="Write Document" onPress={() => goTo('/editor')} testID="drawer-write" />
@@ -244,10 +248,58 @@ export default function Home() {
             <DrawerItem icon="ribbon-outline" label="Plans & Upgrade" onPress={() => goTo('/plans')} testID="drawer-plans" />
             <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
             <DrawerItem icon="person-outline" label="Profile" onPress={() => goTo('/(tabs)/profile')} testID="drawer-profile" />
+            <DrawerItem icon="document-text-outline" label="Terms & Conditions" onPress={() => goTo('/legal?section=terms')} testID="drawer-terms" />
+            <DrawerItem icon="shield-half-outline" label="Children's Privacy Policy" onPress={() => goTo('/legal?section=children')} testID="drawer-children" />
+            <DrawerItem icon="sparkles-outline" label="Usage of AI Policy" onPress={() => goTo('/legal?section=ai')} testID="drawer-ai-policy" />
+            <DrawerItem icon="ribbon-outline" label="NDA & Legal" onPress={() => goTo('/legal?section=legal')} testID="drawer-nda-legal" />
             <DrawerItem icon="log-out-outline" label="Log out" onPress={logout} testID="drawer-logout" danger />
             </ScrollView>
-          </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Long-press document actions */}
+      <Modal visible={!!docAction} transparent animationType="fade" onRequestClose={() => setDocAction(null)}>
+        <Pressable style={ss.actionOverlay} onPress={() => setDocAction(null)}>
+          <View style={ss.actionSheet}>
+            <Text style={ss.actionTitle} numberOfLines={1}>{docAction?.title}</Text>
+            <Pressable
+              testID="doc-action-share"
+              style={ss.actionRow}
+              onPress={async () => {
+                const d = docAction; setDocAction(null);
+                try { await sharePdf(`${API_BASE}/documents/${d.id}/signed-pdf`, `${d.title}.pdf`); } catch {}
+              }}
+            >
+              <Ionicons name="share-social-outline" size={19} color={theme.colors.brand} />
+              <Text style={ss.actionText}>Share PDF</Text>
+            </Pressable>
+            <Pressable
+              testID="doc-action-delete"
+              style={ss.actionRow}
+              onPress={async () => {
+                const d = docAction; setDocAction(null);
+                const doDelete = async () => { try { await api.deleteDocument(d.id); load(); } catch {} };
+                if (Platform.OS === 'web') {
+                  // eslint-disable-next-line no-alert
+                  if (typeof window !== 'undefined' && window.confirm(`Delete "${d.title}"?`)) doDelete();
+                } else {
+                  Alert.alert('Delete document', `Delete "${d.title}"? This cannot be undone.`, [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete', style: 'destructive', onPress: doDelete },
+                  ]);
+                }
+              }}
+            >
+              <Ionicons name="trash-outline" size={19} color={theme.colors.error} />
+              <Text style={[ss.actionText, { color: theme.colors.error }]}>Delete</Text>
+            </Pressable>
+          </View>
         </Pressable>
+      </Modal>
+      {/* Voice agent — immersive overlay over Home */}
+      <Modal visible={voiceOpen} transparent animationType="fade" onRequestClose={() => setVoiceOpen(false)}>
+        <VoiceScreen onClose={() => setVoiceOpen(false)} />
       </Modal>
     </SafeAreaView>
   );
@@ -271,21 +323,29 @@ function StatCard({ num, label }: { num: number; label: string }) {
   );
 }
 
-function RowCard({ item, kind, onPress }: { item: any; kind: string; onPress: () => void }) {
+function RowCard({ item, kind, onPress, onLongPress }: { item: any; kind: string; onPress: () => void; onLongPress?: () => void }) {
   const isNormal = item.mode === 'normal';
+  const firstFile = (item.attached_files || [])[0]?.name || '';
+  const extMatch = firstFile.match(/\.(docx?|xlsx?|pptx?|txt|csv)$/i);
+  const ext = extMatch ? `.${extMatch[1].toLowerCase()}` : '.pdf';
   return (
-    <Pressable testID={`home-row-${item.id}`} style={ss.rowCard} onPress={onPress}>
+    <Pressable testID={`home-row-${item.id}`} style={ss.rowCard} onPress={onPress} onLongPress={onLongPress} delayLongPress={350}>
       <View style={ss.rowIcon}>
         <Ionicons name={isNormal ? 'document-text-outline' : 'shield-checkmark-outline'} size={18} color={theme.colors.brand} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={ss.rowTitle} numberOfLines={1}>{item.title}</Text>
+        <Text style={ss.rowTitle} numberOfLines={1}>{item.title}<Text style={ss.rowExt}> {ext}</Text></Text>
         <Text style={ss.rowMeta} numberOfLines={1}>
           {kind === 'received' ? `from ${item.sender_email}` : item.category}
           {' · '}
           {new Date(item.updated_at || item.created_at).toLocaleDateString()}
         </Text>
       </View>
+      {onLongPress && (
+        <Pressable testID={`home-row-more-${item.id}`} onPress={onLongPress} hitSlop={8} style={{ padding: 4 }}>
+          <Ionicons name="ellipsis-vertical" size={16} color={theme.colors.muted} />
+        </Pressable>
+      )}
       <Ionicons name="chevron-forward" size={16} color={theme.colors.muted} />
     </Pressable>
   );
@@ -297,6 +357,12 @@ const ss = StyleSheet.create({
   greeting: { color: theme.colors.muted, fontSize: 13 },
   name: { color: theme.colors.brand, fontSize: 24, fontWeight: '500', letterSpacing: -0.5 },
   aiCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.card },
+  orbBtn: { marginLeft: 10, borderRadius: 22, shadowColor: '#5856d6', shadowOpacity: 0.5, shadowRadius: 8, shadowOffset: { width: 0, height: 0 }, elevation: 6 },
+  actionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  actionSheet: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, paddingBottom: 34 },
+  actionTitle: { color: theme.colors.muted, fontSize: 12.5, fontWeight: '600', marginBottom: 8 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: theme.colors.divider },
+  actionText: { color: theme.colors.brand, fontSize: 15, fontWeight: '500' },
   iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 12, paddingHorizontal: 12, marginTop: 12, height: 42 },
   searchInput: { flex: 1, color: theme.colors.brand, fontSize: 14, paddingVertical: 0 },
@@ -323,6 +389,7 @@ const ss = StyleSheet.create({
   rowCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: theme.colors.card, padding: 12, borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: theme.colors.border },
   rowIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { color: theme.colors.brand, fontSize: 13, fontWeight: '500' },
+  rowExt: { color: theme.colors.muted, fontSize: 10.5, fontWeight: '600' },
   rowMeta: { color: theme.colors.muted, fontSize: 11, marginTop: 2 },
   empty: { alignItems: 'center', marginTop: 60, paddingHorizontal: 30 },
   emptyTitle: { color: theme.colors.brand, fontSize: 18, fontWeight: '500', marginTop: 24, textAlign: 'center' },

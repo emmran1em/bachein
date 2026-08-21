@@ -7,6 +7,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { theme } from '@/src/theme';
 import { api, uploadFile } from '@/src/api';
+import { sharePdf } from '@/src/share';
 import { useToast } from '@/src/components/Toast';
 import { playSent } from '@/src/lib/sound';
 import { scanStore } from '@/src/lib/scanStore';
@@ -18,6 +19,37 @@ export default function CreateMode() {
   const isSecure = secure === '1';
   const [showUpload, setShowUpload] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [doneDoc, setDoneDoc] = useState<{ id: string; title: string } | null>(null);
+  const [savedDl, setSavedDl] = useState<{ download_id: string; name: string } | null>(null);
+  const [nextBusy, setNextBusy] = useState(false);
+
+  const saveToDownloads = async () => {
+    setNextBusy(true);
+    try {
+      let first: any = null;
+      for (const f of captured) {
+        let b64 = '';
+        if (Platform.OS === 'web') {
+          const blob = await (await fetch(f.uri)).blob();
+          b64 = await new Promise<string>((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(String(r.result).split(',')[1] || '');
+            r.onerror = rej;
+            r.readAsDataURL(blob);
+          });
+        } else {
+          b64 = await FileSystem.readAsStringAsync(f.uri, { encoding: 'base64' as any });
+        }
+        try {
+          const dl: any = await api.downloadsImport({ name: f.name, file_base64: b64, mime: f.mime });
+          if (!first) first = dl;
+        } catch {}
+      }
+      setSavedDl(first);
+      toast.show('Saved to Downloads ✓', 'success');
+    } catch (e: any) { toast.show(e.message, 'error'); }
+    finally { setNextBusy(false); }
+  };
   const [captured, setCaptured] = useState<Array<{ name: string; uri: string; mime: string }>>([]);
 
   const draftWithAi = () => {
@@ -92,7 +124,7 @@ export default function CreateMode() {
         });
         playSent();
         toast.show('Saved to your documents ✓', 'success');
-        router.replace(`/document/${doc.id}`);
+        setDoneDoc({ id: doc.id, title });
       }
     } catch (e: any) { toast.show(e.message, 'error'); }
     finally { setBusy(false); }
@@ -181,11 +213,41 @@ export default function CreateMode() {
               </View>
             )}
 
-            <Pressable testID="upload-next-btn" style={[s.primaryBtn, (busy || captured.length === 0) && { opacity: 0.5 }]} onPress={uploadAll} disabled={busy || captured.length === 0}>
-              {busy ? <ActivityIndicator color={theme.colors.onBrandPrimary} /> : (
-                <><Ionicons name="arrow-forward" size={16} color={theme.colors.onBrandPrimary} /><Text style={s.primaryBtnText}>{isSecure ? 'Continue to security' : 'Save document'}</Text></>
-              )}
-            </Pressable>
+            {!doneDoc ? (
+              <Pressable testID="upload-next-btn" style={[s.primaryBtn, (busy || captured.length === 0) && { opacity: 0.5 }]} onPress={uploadAll} disabled={busy || captured.length === 0}>
+                {busy ? <ActivityIndicator color={theme.colors.onBrandPrimary} /> : (
+                  <><Ionicons name="checkmark" size={16} color={theme.colors.onBrandPrimary} /><Text style={s.primaryBtnText}>{isSecure ? 'Continue to security' : 'Done'}</Text></>
+                )}
+              </Pressable>
+            ) : (
+              <View style={s.doneCard} testID="upload-done-card">
+                <Ionicons name="checkmark-circle" size={40} color="#16a34a" />
+                <Text style={s.doneTitle}>{doneDoc.title}</Text>
+                <Text style={s.doneSub}>Saved to your documents — it now shows in Recent docs on Home</Text>
+                {!savedDl ? (
+                  <Pressable testID="upload-next2-btn" style={[s.primaryBtn, { alignSelf: 'stretch' }, nextBusy && { opacity: 0.6 }]} disabled={nextBusy} onPress={saveToDownloads}>
+                    {nextBusy ? <ActivityIndicator color={theme.colors.onBrandPrimary} /> : (
+                      <><Ionicons name="arrow-forward" size={16} color={theme.colors.onBrandPrimary} /><Text style={s.primaryBtnText}>Next</Text></>
+                    )}
+                  </Pressable>
+                ) : (
+                  <>
+                    <Pressable
+                      testID="upload-share-btn"
+                      style={[s.primaryBtn, { alignSelf: 'stretch' }]}
+                      onPress={() => sharePdf(api.downloadFileUrl(savedDl.download_id), `${savedDl.name}.pdf`).catch((e) => toast.show(e.message, 'error'))}
+                    >
+                      <Ionicons name="share-social-outline" size={16} color={theme.colors.onBrandPrimary} />
+                      <Text style={s.primaryBtnText}>Share</Text>
+                    </Pressable>
+                    <Text style={s.doneSub}>Also saved in File Kit → Downloads ✓</Text>
+                  </>
+                )}
+                <Pressable testID="upload-view-btn" style={s.linkBtn} onPress={() => router.replace(`/document/${doneDoc.id}`)}>
+                  <Text style={s.linkText}>View document</Text>
+                </Pressable>
+              </View>
+            )}
           </>
         )}
       </ScrollView>
@@ -195,6 +257,11 @@ export default function CreateMode() {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.surface },
+  doneCard: { alignItems: 'center', gap: 10, backgroundColor: theme.colors.card, borderRadius: 18, borderWidth: 1, borderColor: theme.colors.border, padding: 22, marginTop: 20 },
+  doneTitle: { color: theme.colors.brand, fontSize: 16, fontWeight: '600', textAlign: 'center' },
+  doneSub: { color: theme.colors.muted, fontSize: 12.5, textAlign: 'center' },
+  linkBtn: { marginTop: 4 },
+  linkText: { color: theme.colors.muted, fontSize: 13, textDecorationLine: 'underline' },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 8 },
   closeBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border },
   eyebrow: { color: theme.colors.muted, fontSize: 11, letterSpacing: 1 },

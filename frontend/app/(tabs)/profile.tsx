@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { theme } from '@/src/theme';
 import { clearAuth, getUser } from '@/src/api';
 
@@ -50,6 +51,7 @@ export default function Profile() {
           <Ionicons name="log-out-outline" size={18} color={theme.colors.error} />
           <Text style={ss.logoutText}>Log out</Text>
         </Pressable>
+        <Text style={ss.version} testID="app-version">Bachein v{Constants.expoConfig?.version || '1.0.0'}</Text>
       </View>
     </SafeAreaView>
   );
@@ -69,4 +71,5 @@ const ss = StyleSheet.create({
   rowText: { color: theme.colors.brand, fontSize: 15 },
   logout: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 32, alignSelf: 'center' },
   logoutText: { color: theme.colors.error, fontSize: 15, fontWeight: '500' },
+  version: { color: theme.colors.muted, fontSize: 12, textAlign: 'center', marginTop: 14 },
 });

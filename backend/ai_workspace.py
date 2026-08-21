@@ -17,7 +17,7 @@ import uuid
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -501,11 +501,14 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         composed = (history_text + "\n\n" + prompt) if history_text else prompt
 
         system = (
-            "You are Bachein AI — a premium document workspace assistant. "
-            "You help with writing, drafting NDAs & contracts, summarizing, reviewing code, and analyzing documents. "
-            "Be concise, structured (use markdown when useful), and clear. "
-            "Do NOT invent facts. When unsure, say so. "
-            "If the user asks for a document, format it cleanly with title, sections, and clear formatting."
+            "You are Droit — Bachein's premium document intelligence assistant. Introduce yourself as Droit. "
+            "You help with writing, drafting NDAs & contracts, summarizing, analyzing clauses, finding risks, and modifying documents. "
+            "Be concise, structured (use markdown when useful), and clear. Do NOT invent facts; when answering from an attached document, "
+            "prefix facts with 'According to your document:' and suggestions with 'Suggested improvement:'. "
+            "SPECIAL ACTIONS:\n"
+            "1. If the user asks you to CREATE, GENERATE or MODIFY a document/PDF (e.g. 'generate this as a PDF', 'rewrite this NDA'), first give a SHORT explanation of what you did, "
+            "then output the FULL final document text between <DOCUMENT title=\"Short Title\"> and </DOCUMENT> tags. The document text must be complete and professional.\n"
+            "2. If the user asks you to SEND a document to someone and gives an email, include the tag <SEND email=\"their@email.com\"/> in your reply and confirm the send in one sentence."
         )
 
         # 5. Call the LLM
@@ -516,11 +519,67 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         except Exception as e:
             raise HTTPException(500, f"AI error: {e}")
 
+        # ── Droit special actions: document artifact + autonomous send ──
+        artifact = None
+        dm = re.search(r'<DOCUMENT title="(.*?)">([\s\S]*?)</DOCUMENT>', reply)
+        if dm:
+            a_title = (dm.group(1) or "Droit Document").strip()[:80]
+            a_body = dm.group(2).strip()
+            reply = reply.replace(dm.group(0), "").strip()
+            try:
+                import fitz as _fitz
+                pdf = _fitz.open()
+                page = pdf.new_page(width=595, height=842)
+                page.insert_text((60, 60), a_title, fontsize=16, fontname="hebo")
+                rect = _fitz.Rect(60, 90, 535, 800)
+                text_left = a_body
+                while text_left:
+                    leftover = page.insert_textbox(rect, text_left, fontsize=10.5, fontname="helv", lineheight=1.5)
+                    if leftover >= 0:
+                        break
+                    # crude split: keep filling new pages
+                    words = text_left.split(" ")
+                    fit_guess = max(50, int(len(words) * 0.6))
+                    page.insert_textbox(rect, " ".join(words[:fit_guess]), fontsize=10.5, fontname="helv", lineheight=1.5)
+                    text_left = " ".join(words[fit_guess:])
+                    if text_left:
+                        page = pdf.new_page(width=595, height=842)
+                        rect = _fitz.Rect(60, 60, 535, 800)
+                    else:
+                        break
+                did = await _register_download(user["id"], a_title, "droit-doc", pdf.tobytes())
+                artifact = {"download_id": did, "name": a_title}
+            except Exception:
+                artifact = None
+        sent_to = None
+        sm = re.search(r'<SEND email="([^"]+)"\s*/?>', reply)
+        if sm:
+            sent_to = sm.group(1).strip().lower()
+            reply = reply.replace(sm.group(0), "").strip()
+            try:
+                _ts = _now_iso()
+                await db.documents.insert_one({
+                    "id": str(uuid.uuid4()), "sender_id": user["id"],
+                    "sender_name": user.get("name", ""), "sender_email": user.get("email", ""),
+                    "recipient_email": sent_to, "title": (artifact or {}).get("name", "Document from Droit"),
+                    "content": (dm.group(2).strip()[:20000] if dm else text[:2000]),
+                    "category": "Normal PDF", "mode": "secure", "status": "sent",
+                    "security_config": {"otp_verification": False, "face_verification": False, "voice_oath": False, "digital_signature": False},
+                    "attached_files": [], "created_at": _ts, "updated_at": _ts,
+                    "delivered": False, "opened": False, "otp_verified": False,
+                    "face_verified": False, "voice_oath_completed": False, "voice_attempts": 0,
+                    "agreement_read_pct": 0, "signature_status": "pending",
+                })
+            except Exception:
+                sent_to = None
+
         # 6. Persist + consume quota
         assistant_msg = {
             "id": str(uuid.uuid4()), "conv_id": conv_id, "user_id": user["id"],
             "role": "assistant", "content": reply, "provider": provider_id,
             "source": auth["source"], "ts": _now_iso(),
+            **({"artifact": artifact} if artifact else {}),
+            **({"sent_to": sent_to} if sent_to else {}),
         }
         await db.ai_messages.insert_one(dict(assistant_msg))
         if auth["source"] != "byo":
@@ -542,7 +601,9 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
             "reply": reply,
             "provider": provider_id,
             "source": auth["source"],
-            "disclaimer": "AI can make mistakes. Please double-check important information.",
+            **({"artifact": artifact} if artifact else {}),
+            **({"sent_to": sent_to} if sent_to else {}),
+            "disclaimer": "AI can make mistake, please check important info.",
         }
 
     # ============== Phase 3 — Ask BacheIn (floating explain) ==============
@@ -586,7 +647,7 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         if auth["source"] != "byo":
             await _consume_quota(user["id"])
         return {"explanation": reply, "provider": pid, "source": auth["source"],
-                "disclaimer": "AI can make mistakes. Please double-check important information."}
+                "disclaimer": "AI can make mistake, please check important info."}
 
     # ============== Phase 4 — Question Paper Creator (board-grade) ==============
     from qp_engine import (BOARDS as QP_BOARDS, DIFFICULTIES as QP_DIFFS, ACADEMIC_YEARS as QP_YEARS,
@@ -1090,5 +1151,82 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         pdf_bytes = render_evaluated_booklet(p.get("answers") or {}, p.get("params", {}))
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"inline; filename=answer-booklet-{ap_id}.pdf"})
+
+    # ══════════════ Voice agent — ElevenLabs STT ↔ LLM ↔ TTS ══════════════
+    _EL_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+    _EL_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+
+    @router.post("/voice/converse")
+    async def voice_converse(
+        audio: UploadFile = File(...),
+        conversation_id: Optional[str] = Form(None),
+        user=Depends(get_current_user),
+    ):
+        """One conversational turn: user speech → transcript → Bachein LLM → spoken reply."""
+        if not _EL_KEY:
+            raise HTTPException(500, "Voice engine not configured")
+        import io as _io
+        import asyncio as _aio
+        from elevenlabs.client import ElevenLabs as _EL
+        data = await audio.read()
+        if len(data) < 800:
+            return {"transcript": "", "reply": "", "audio_base64": None, "conversation_id": conversation_id}
+        el = _EL(api_key=_EL_KEY)
+        loop = _aio.get_event_loop()
+
+        # 1. Speech → text (ElevenLabs Scribe)
+        def _stt():
+            return el.speech_to_text.convert(file=_io.BytesIO(data), model_id="scribe_v1")
+        try:
+            tr = await loop.run_in_executor(None, _stt)
+        except Exception as e:
+            raise HTTPException(502, f"Speech recognition failed: {e}")
+        transcript = (getattr(tr, "text", "") or "").strip()
+        if not transcript:
+            return {"transcript": "", "reply": "", "audio_base64": None, "conversation_id": conversation_id}
+
+        # 2. Same Bachein chat brain (history + quota + provider selection preserved)
+        chat_res = await chat(ChatSendIn(message=transcript, conversation_id=conversation_id), user)
+        reply = chat_res.get("reply", "")
+
+        # 3. Text → speech (low-latency turbo voice)
+        spoken = re.sub(r"[*#`_>|]+", " ", reply)
+        spoken = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", spoken)
+        spoken = re.sub(r"\s+", " ", spoken).strip()[:900]
+        audio_b64 = None
+        if spoken:
+            def _tts():
+                gen = el.text_to_speech.convert(
+                    text=spoken, voice_id=_EL_VOICE,
+                    model_id="eleven_turbo_v2_5", output_format="mp3_22050_32",
+                )
+                return b"".join(gen)
+            try:
+                audio_bytes = await loop.run_in_executor(None, _tts)
+                audio_b64 = base64.b64encode(audio_bytes).decode()
+            except Exception:
+                audio_b64 = None  # still return the text reply
+        return {
+            "transcript": transcript, "reply": reply, "audio_base64": audio_b64,
+            "conversation_id": chat_res.get("conversation_id", conversation_id),
+            "disclaimer": "AI can make mistake, please check important info.",
+        }
+
+    @router.post("/voice/say")
+    async def voice_say(body: Dict[str, Any], user=Depends(get_current_user)):
+        """Plain TTS for short phrases (greetings/status lines)."""
+        if not _EL_KEY:
+            raise HTTPException(500, "Voice engine not configured")
+        import asyncio as _aio
+        from elevenlabs.client import ElevenLabs as _EL
+        text = str(body.get("text", "")).strip()[:300]
+        if not text:
+            raise HTTPException(400, "text required")
+        el = _EL(api_key=_EL_KEY)
+        def _tts():
+            gen = el.text_to_speech.convert(text=text, voice_id=_EL_VOICE, model_id="eleven_turbo_v2_5", output_format="mp3_22050_32")
+            return b"".join(gen)
+        audio_bytes = await _aio.get_event_loop().run_in_executor(None, _tts)
+        return {"audio_base64": base64.b64encode(audio_bytes).decode()}
 
     return router

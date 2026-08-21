@@ -55,18 +55,11 @@ export default function ScannerScreen() {
     setPages((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }, []);
 
-  /** Detect corners then apply crop+filter — runs in background after instant capture. */
+  /** One fast round-trip: server auto-detects corners + crops + enhances. */
   const processPage = useCallback(async (id: string, raw: string, filter: Filter, rotate: number, corners?: number[][]) => {
     try {
-      let c = corners;
-      let imgW: number | undefined;
-      let imgH: number | undefined;
-      if (!c) {
-        const d: any = await api.scannerDetect(raw);
-        c = d.corners; imgW = d.width; imgH = d.height;
-      }
-      const r: any = await api.scannerApply({ image_base64: raw, corners: c, filter, rotate });
-      updatePage(id, { processed: r.image_base64, corners: c, status: 'ready', ...(imgW ? { imgW, imgH } : {}) });
+      const r: any = await api.scannerApply({ image_base64: raw, corners, filter, rotate });
+      updatePage(id, { processed: r.image_base64, status: 'ready', ...(corners ? { corners } : {}) });
     } catch {
       updatePage(id, { processed: raw, status: 'ready' });
     }

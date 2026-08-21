@@ -66,3 +66,24 @@
 - AWS Rekognition: needs AWS_ACCESS_KEY_ID/SECRET/region from user
 - GitHub OAuth: user must set callback URL https://nda-hub-1.preview.emergentagent.com/github in their GitHub OAuth App
 - Next big feature approved: local-first storage + user-owned Google Drive sync (needs Google OAuth creds w/ Drive scope)
+
+## Iterations 14 (Droit AI + Voice agent + polish) — testing-agent green
+- **Droit AI** (renamed from Bachein AI): system prompt introduces Droit; <DOCUMENT> tag → backend renders PDF → Downloads + artifact card in chat (view/share, Claude-style); <SEND email> tag → autonomously creates doc addressed to that email (recipient sees it in Received) + 'Sent to ✓' chip
+- **Chat UI Claude-style**: left cream history drawer (84% width), serif assistant font, 'Ask Droit anything' placeholder
+- **Voice agent**: real two-way voice — /api/aiw/voice/converse (ElevenLabs scribe_v1 STT → same chat brain → eleven_turbo_v2_5 TTS, voice Sarah EXAVITQu4vr4xnSDxMaL — free-tier key can't use Rachel), /voice/say for greetings; frontend voice overlay OVER Home (BlurView + rainbow animated border + pulsing orb + resonating rings, states idle/listening/thinking/speaking/denied/error, metering auto turn-end 1.4s silence, tap-to-interrupt); orb asset assets/images/voice-orb.png; orb button on Home header + chat header
+- **AWS Rekognition** live: face_match.match() uses CompareFaces (falls back to pHash); creds in backend/.env (us-east-1)
+- **GitHub OAuth creds updated** in .env (flow still pending build)
+- **Home**: extension badge (.pdf/.docx) on rows, long-press + ellipsis (⋮) → Share PDF / Delete (DELETE /api/documents/{id}, sender-only), PDF filter shows ALL docs incl NDA, drawer scroll fixed (overlay/View restructure) + legal entries
+- **Legal pages** /legal?section=terms|children|ai|legal; **Profile** shows Bachein v1.0.0
+- **Upload existing**: Done → success card → Next → POST /api/downloads/import (image→PDF) → Share + View document
+- **Viewer**: pointer (color-wand) → circle word → POST /api/viewer/explain (Gemini vision crop) → half-sheet explanation
+- **Scanner**: single round-trip processing (faster); PageSign has explicit Add-signature reopen button
+- **Disclaimer fixed everywhere**: "AI can make mistake, please check important info."
+- JWT 30 days; elevenlabs+boto3 in requirements.txt
+
+## Deferred (user's pre-deploy list — next phase)
+- Full RAG pipeline (ChromaDB embeddings, chunking, retrieval) + Textract auto-OCR fallback + document versioning/change-review (accept/reject) + DOCX/HTML export of Droit docs
+- Upload-existing → open scanner Pages section directly with rename-at-top
+- Viewer A4 smoothness pass + lock/highlight tools in viewer
+- Compressor upgrade w/ Ghostscript (gs not installed in pod)
+- Google Drive local-first sync, GitHub connector OAuth flow

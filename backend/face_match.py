@@ -80,6 +80,45 @@ def hamming(a: str, b: str) -> int:
 
 
 def match(b64_reference: str, b64_candidate: str, threshold: int = 90) -> tuple:
+    """Face match. Uses AWS Rekognition CompareFaces when AWS creds are configured,
+    falling back to the local pHash pipeline otherwise.
+    Returns (matched: bool, distance: int, has_face: bool)."""
+    import os
+    if os.environ.get("AWS_ACCESS_KEY_ID"):
+        try:
+            import base64
+            import boto3
+            client = boto3.client(
+                "rekognition",
+                region_name=os.environ.get("AWS_REGION", "us-east-1"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            )
+            def _raw(b):
+                if "," in b[:80]:
+                    b = b.split(",", 1)[1]
+                return base64.b64decode(b)
+            resp = client.compare_faces(
+                SourceImage={"Bytes": _raw(b64_reference)},
+                TargetImage={"Bytes": _raw(b64_candidate)},
+                SimilarityThreshold=80,
+            )
+            matches = resp.get("FaceMatches", [])
+            if matches:
+                sim = matches[0].get("Similarity", 0.0)
+                return True, int(100 - sim), True
+            # no match found — was there a face at all in target?
+            has_face = bool(resp.get("UnmatchedFaces"))
+            return False, 100, has_face
+        except Exception as e:
+            # InvalidParameterException = no face detected in one of the images
+            if "InvalidParameter" in str(type(e).__name__) or "InvalidParameter" in str(e):
+                return False, 100, False
+            # credentials/network problem → fall back to local matcher
+    return _match_local(b64_reference, b64_candidate, threshold)
+
+
+def _match_local(b64_reference: str, b64_candidate: str, threshold: int = 90) -> tuple:
     """Returns (matched, distance, has_face_in_candidate)."""
     try:
         h_ref = compute_face_hash(b64_reference) if b64_reference else ""

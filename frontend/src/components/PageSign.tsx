@@ -86,6 +86,13 @@ export default function PageSign({ visible, image, onClose, onApply }: {
           )}
         </View>
         {sig && <Text style={s.hint}>Drag the signature to where it should appear, then tap Embed</Text>}
+        {!sig && !sheetOpen && (
+          <Pressable style={s.addSigBtn} onPress={() => setSheetOpen(true)} testID="pagesign-open-sheet">
+            <Ionicons name="create-outline" size={16} color="#fff" />
+            <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13.5 }}>Add signature</Text>
+          </Pressable>
+        )}
+        {/* PageSign fix: SignatureBottomSheet nested-modal issue — close sheet when signature captured */}
         <SignatureBottomSheet
           visible={sheetOpen && visible}
           onClose={() => { setSheetOpen(false); if (!sig) onClose(); }}
@@ -130,4 +137,5 @@ const s = StyleSheet.create({
   sigBox: { position: 'absolute', borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#3b82f6', borderRadius: 6, backgroundColor: 'rgba(59,130,246,0.1)', alignItems: 'center', justifyContent: 'center' },
   dragHint: { position: 'absolute', top: -9, right: -9, width: 20, height: 20, borderRadius: 10, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
   hint: { color: '#9aa4b2', fontSize: 12, textAlign: 'center', paddingBottom: 16 },
+  addSigBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#2dc17c', borderRadius: 999, paddingVertical: 12, marginHorizontal: 40, marginBottom: 20 },
 });

@@ -1,0 +1,65 @@
+{
+  "summary": "Iter 14 (Droit AI artifact + <SEND> tag, voice overlay, home extension badges + long-press action sheet + PDF filter, legal screen, profile version, Droit chat UI, create/upload-existing, viewer pointer, scanner) — Backend 9/9 pytest PASS after fixing one real bug in ai_workspace.py (Droit <SEND> handler was inserting a document missing updated_at + several DocumentOut required fields, causing GET /api/documents/received to return 500 for the recipient). Backend now: POST /api/aiw/chat 'Generate … PDF' → artifact.download_id + name returned; GET /api/downloads/{id}/file → 200 %PDF; second turn 'send it to bob@bachein.com' → sent_to='bob@bachein.com' returned + document created and listed in bob's /api/documents/received; DELETE /api/documents/{id} → sender 200 {deleted:true}, non-sender 403, doc gone (GET → 404); POST /api/downloads/import image/png → 200 with download_id + valid PDF fetch; POST /api/viewer/explain (small labeled bbox) → 200 with 'explanation'; POST /api/aiw/voice/say → 200 audio_base64. Frontend (mobile 390x844, alice@bachein.com Test1234!): (1) Home voice orb testID home-voice-orb next to search → tapping opens immersive overlay with data-testid='voice-screen' OVER home (home-screen still in DOM behind blur), 'Tap the orb and start talking' text present; chevron-down (voice-back) closes overlay returning to intact Home. (2) Home doc rows show extension badge '.pdf' after title (verified 'TEST_voice .pdf' in row0). PDF filter chip loads rows (14 rows). (3) Drawer: menu-btn opens drawer → drawer-scroll container present + drawer-terms + drawer-children + drawer-ai-policy + drawer-nda-legal + drawer-profile + drawer-logout all present; tapping drawer-ai-policy navigates to /legal?section=ai → legal-screen renders 'Usage of AI Policy' section; legal-back returns to Home. (4) Profile: app-version testID reads 'Bachein v1.0.0' exactly. (5) AI/chat: input placeholder is 'Ask Droit anything'; assistant header/name renders as 'Droit'; ai-history-btn opens LEFT side drawer with 'Droit' title + New button + list of 17 conversations; sending 'Generate a two-line congratulations note as a PDF titled TEST_iter14_UI' → droit-artifact card appeared in ~5s with artifact-view + artifact-share buttons, name/badge 'Document · PDF'. (6) Regressions: /sign-pdf renders 'Sign Document' + 'Upload a PDF to sign' (no red screen); /scanner renders scanner-screen with scanner-grant permission gate ('Allow camera' + 'Import from gallery instead') no crash; /create/mode?category=Report shows create-mode-screen + mode-upload testID; floating dock tabs Home/Documents/File Kit/AI visible on all screens. ONE UI BUG: on web preview, long-press on home rows does NOT trigger the doc action sheet — mouse.down + 1200ms hold + mouse.up over row0 fires onPress (navigates to /receive/{id}) instead of onLongPress; doc-action-share / doc-action-delete never mount. Native RN behaviour likely fine but web Pressable delayLongPress isn't wired reliably (see index.tsx:332). REACT-NATIVE-WEB WARNING (non-blocking): multiple 'shadow*' style props are deprecated. Use boxShadow / textShadow* deprecated. Use textShadow / props.pointerEvents deprecated. Use style.pointerEvents / Image style.resizeMode deprecated. Use props.resizeMode — spread across many screens; RN 0.76+ deprecations, does not break functionality but should be addressed. Also observed a JS 'Uncaught Error: Cannot start audio recording without initializing a MediaRecorder' from voice.tsx:26 when closing the overlay — surfaces as an in-app error dialog on web preview only (main agent notes web headless has no mic; expected but the close path should catch it silently).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/aiw/chat (SEND tag path) + GET /api/documents/received",
+        "issue": "FIXED — Droit <SEND email=...> handler was inserting a document without updated_at (and several DocumentOut fields), which caused GET /api/documents/received for the recipient to raise pydantic ValidationError → HTTP 500. Fixed in /app/backend/ai_workspace.py by adding updated_at (same as created_at) + delivered/opened/otp_verified/face_verified/voice_oath_completed/voice_attempts/agreement_read_pct/signature_status. Backfilled 2 pre-existing docs in DB."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "index.tsx RowCard (Pressable onLongPress)",
+        "issue": "On web preview, long-press on home-row-{id} does not fire onLongPress — even a 1200ms mouse hold triggers onPress (navigation to /receive/{id}) instead of opening the doc action sheet. doc-action-share / doc-action-delete Modal never mounts on web. Native mobile likely unaffected. Reference: /app/frontend/app/(tabs)/index.tsx:332 (Pressable delayLongPress={350}).",
+        "testID": "home-row-*, doc-action-share, doc-action-delete",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "voice.tsx stopPlayback on close",
+        "issue": "Closing the voice overlay on web triggers an uncaught 'Cannot start audio recording without initializing a MediaRecorder' error dialog. The overlay does close successfully but the error toast/modal appears. Should be caught silently on web (headless has no mic — expected). Reference: /app/frontend/app/voice.tsx around line 26 (close/stopPlayback path).",
+        "testID": "voice-back",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "Multiple screens", "issue": "React Native Web deprecation warnings observed on almost every render: 'shadow*' style props deprecated (use boxShadow), 'textShadow*' deprecated (use textShadow), 'props.pointerEvents' deprecated (use style.pointerEvents), Image 'style.resizeMode' deprecated (use props.resizeMode). Non-blocking but should be migrated across StyleSheet.create() blocks."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter14_droit_voice_delete.py",
+    "/app/test_reports/pytest/iter14_results.xml"
+  ],
+  "action_items": [
+    "MEDIUM: On web preview, home row Pressable's onLongPress does not fire — action sheet unreachable. Consider adding a right-click/context handler for web, or replace Pressable with GestureDetector/longPressGestureHandler for cross-platform long-press. Users on mobile Expo Go likely work, but web preview flow is blocked.",
+    "LOW: /app/frontend/app/voice.tsx stopPlayback close path throws on web (no MediaRecorder). Wrap the stopPlayback / audio cleanup in try/catch and swallow the InvalidStateError on web so the error dialog doesn't appear when the user chevron-down closes without ever having recorded.",
+    "LOW: Migrate deprecated RN style props across StyleSheet.create() blocks — shadow* → boxShadow, textShadow* → textShadow, pointerEvents prop → style.pointerEvents, Image style.resizeMode → props.resizeMode.",
+    "Optional: also add updated_at to the sent-tag path's returned reply metadata (not strictly needed since /aiw/chat returns sent_to only)."
+  ],
+  "critical_code_review_comments": [
+    "ai_workspace.py Droit <SEND> handler (line ~559): the inserted document was missing updated_at + all default DocumentOut fields (delivered/opened/otp_verified/…/signature_status). Because DocumentOut requires updated_at, the recipient's GET /api/documents/received raised pydantic ValidationError → 500. Now fixed. Consider centralizing document creation via a helper _new_document(sender, recipient, title, content) used by both POST /documents and the Droit send path to avoid drift.",
+    "ai_workspace.py: <DOCUMENT> and <SEND> tags are parsed via regex; if the LLM omits the closing tag or malforms the attribute, the parse silently falls through (no observed issue in this run, but consider logging when a partial tag appears).",
+    "server.py DELETE /documents/{id}: correct 403 for non-sender before delete; 404 vs 403 order verified (returns 404 if not found even to non-sender — correct).",
+    "downloads_routes.py GET /downloads/{did}/file uses user_flex (token-in-query allowed) — good for Share/View from mobile since local blob URL isn't required.",
+    "index.tsx RowCard: onLongPress={onLongPress} delayLongPress={350} — this works on native but react-native-web's Pressable long-press is unreliable when the pointer is not moved. Consider using expo-gesture-handler LongPressGestureHandler for a consistent cross-platform experience."
+  ],
+  "updated_files": [
+    "/app/backend/ai_workspace.py (fixed Droit <SEND> handler to include updated_at + full DocumentOut default fields)",
+    "/app/backend/tests/test_iter14_droit_voice_delete.py (NEW — 9 tests)",
+    "/app/test_reports/pytest/iter14_results.xml (NEW — 9 passed)",
+    "/app/test_reports/iteration_14.json (this report)"
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 — Droit artifact generation + PDF fetch, Droit send-by-tag + bob received-list, delete 200/403, downloads/import image→PDF, viewer/explain, voice/say)",
+    "frontend": "90% (9/10 review items pass — voice overlay + close, home ext badges, drawer + legal + profile version, Droit chat placeholder + name + LEFT history drawer + artifact card + view/share, /sign-pdf, /scanner, /create/mode; 1 web-only bug: home row long-press action sheet does not trigger on web preview)"
+  },
+  "seed_data_creation": "Created via Droit chat: 1 download (TEST_iter14_UI) + 1 sent document to bob (from TestDroitSend). Also created + deleted 1 TEST_iter14 document during delete tests. Backfilled updated_at on 2 pre-existing docs in mongo to unblock /documents/received.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter 14 tests: /app/backend/tests/test_iter14_droit_voice_delete.py. Auth uses field 'token'. /api/documents/received returns a LIST directly, not {items:[…]}. Droit chat: POST /api/aiw/chat body={message:…, conversation_id?:…} — response contains reply, provider, disclaimer, and optionally artifact:{download_id,name} + sent_to (email string). Voice overlay open-by-modal from Home works (data-testid=voice-screen with home-screen still in DOM behind blur); chevron-down closes but a JS 'MediaRecorder not initialised' error dialog appears on web preview only. Long-press on home rows does NOT trigger action sheet on web — even 1200ms hold fires onPress instead. Login flow unchanged: fill email + password → get_by_text('Sign in', exact=True).click(force=True) up to 3 times. AI/chat: placeholder text is 'Ask Droit anything'; history modal is a LEFT drawer with 'Droit' header + New button + conv list; sending a 'Generate…as a PDF' prompt produces data-testid='droit-artifact' card with artifact-view + artifact-share inside ~5-10s (Gemini 3.1 pro). Legal screen: /legal?section=ai renders 'Usage of AI Policy'; legal-back returns.",
+  "rca_of_issue": "ROOT CAUSE (backend 500 on GET /documents/received after Droit send): ai_workspace.py's <SEND> handler built a partial document dict without updated_at + all optional DocumentOut fields; the endpoint's list comprehension `[DocumentOut(**d) for d in docs]` raises pydantic ValidationError on the first offending doc → HTTP 500. REPRO: alice sends 'Generate short note as PDF' then 'send it to bob@bachein.com' via /api/aiw/chat; bob calls GET /api/documents/received → 500. MITIGATION: (a) code fix — insert full doc dict with updated_at=created_at plus the same defaults used by POST /documents; (b) db backfill — {'updated_at': {'$exists': False}} → set to created_at (2 docs). Both applied. Verified pass on rerun."
+}

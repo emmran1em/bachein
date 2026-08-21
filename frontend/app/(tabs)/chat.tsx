@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Platform, ActivityIndicator, Modal, FlatList, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Platform, ActivityIndicator, Modal, FlatList, Keyboard, Image } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
 import { api } from '@/src/api';
+import { sharePdf } from '@/src/share';
 import DotsLoader from '@/src/components/DotsLoader';
 import BacheinAiLogo from '@/src/components/BacheinAiLogo';
 import PlansSheet from '@/src/components/PlansSheet';
@@ -180,7 +181,7 @@ export default function AiWorkspace() {
         quick_action: opts?.quick_action,
       });
       setActiveConv(r.conversation_id);
-      setMessages((m) => [...m, { role: 'assistant', content: r.reply, provider: r.provider, source: r.source, ts: new Date().toISOString() }]);
+      setMessages((m) => [...m, { role: 'assistant', content: r.reply, provider: r.provider, source: r.source, artifact: r.artifact, sent_to: r.sent_to, ts: new Date().toISOString() }]);
       // Refresh quota
       const s: any = await api.aiwSettings(); setSettings(s);
       // Refresh convs (in background)
@@ -268,6 +269,9 @@ export default function AiWorkspace() {
           <Text style={s.planChipDivider}>|</Text>
           <Text style={s.planChipTextUpgrade}>Upgrade</Text>
         </Pressable>
+        <Pressable testID="ai-voice-orb" onPress={() => router.push({ pathname: '/voice', params: activeConv ? { conv: activeConv } : {} })} style={{ marginLeft: 8 }}>
+          <Image source={require('../../assets/images/voice-orb.png')} style={{ width: 36, height: 36, borderRadius: 18 }} />
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={12} style={{ flex: 1 }}>
@@ -305,7 +309,7 @@ export default function AiWorkspace() {
                   {m.role === 'assistant' && (
                     <View style={s.aiHeaderRow}>
                       <BacheinAiLogo size={22} />
-                      <Text style={s.aiName}>BacheIn</Text>
+                      <Text style={s.aiName}>Droit</Text>
                     </View>
                   )}
                   {m.role === 'user' ? (
@@ -313,6 +317,24 @@ export default function AiWorkspace() {
                   ) : (
                     <View style={s.msgAi}>
                       <Text style={s.msgAiText} selectable>{m.content}</Text>
+                      {!!m.artifact && (
+                        <View style={s.artifactCard} testID="droit-artifact">
+                          <View style={s.artifactIcon}><Ionicons name="document-text" size={20} color={theme.colors.brand} /></View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={s.artifactName} numberOfLines={1}>{m.artifact.name}</Text>
+                            <Text style={s.artifactSub}>Document · PDF</Text>
+                          </View>
+                          <Pressable testID="artifact-view" onPress={() => router.push({ pathname: '/viewer', params: { url: api.downloadFileUrl(m.artifact.download_id), name: m.artifact.name } })} style={s.artifactBtn}>
+                            <Ionicons name="eye-outline" size={17} color={theme.colors.brand} />
+                          </Pressable>
+                          <Pressable testID="artifact-share" onPress={() => sharePdf(api.downloadFileUrl(m.artifact.download_id), `${m.artifact.name}.pdf`).catch(() => {})} style={s.artifactBtn}>
+                            <Ionicons name="share-outline" size={17} color={theme.colors.brand} />
+                          </Pressable>
+                        </View>
+                      )}
+                      {!!m.sent_to && (
+                        <View style={s.sentChip}><Ionicons name="paper-plane" size={12} color="#16a34a" /><Text style={s.sentChipText}>Sent to {m.sent_to} ✓</Text></View>
+                      )}
                     </View>
                   )}
                 </View>
@@ -322,7 +344,7 @@ export default function AiWorkspace() {
                 <View style={s.msgAiWrap}>
                   <View style={s.aiHeaderRow}>
                     <BacheinAiLogo size={22} />
-                    <Text style={s.aiName}>BacheIn</Text>
+                    <Text style={s.aiName}>Droit</Text>
                   </View>
                   <View style={[s.msgAi, { paddingVertical: 14 }]}>
                     <DotsLoader />
@@ -345,7 +367,7 @@ export default function AiWorkspace() {
               style={s.input}
               value={input}
               onChangeText={setInput}
-              placeholder={voiceOn ? 'Listening…' : 'Ask BacheIn anything'}
+              placeholder={voiceOn ? 'Listening…' : 'Ask Droit anything'}
               placeholderTextColor={theme.colors.muted}
               multiline
             />
@@ -456,14 +478,13 @@ export default function AiWorkspace() {
       </Modal>
 
       {/* ============== History modal ============== */}
-      <Modal visible={showHistory} transparent animationType="slide" onRequestClose={() => setShowHistory(false)}>
+      <Modal visible={showHistory} transparent animationType="fade" onRequestClose={() => setShowHistory(false)}>
         <View style={s.overlay}>
-          <Pressable style={s.backdrop} onPress={() => setShowHistory(false)} />
           <View style={s.sheet}>
             <View style={s.handle} />
             <View style={s.sheetHead}>
               <View style={{ flex: 1 }}>
-                <Text style={s.sheetTitle}>Chat History</Text>
+                <Text style={s.sheetTitle}>Droit</Text>
                 <Text style={s.sheetSub}>{convs.length} conversations</Text>
               </View>
               <Pressable onPress={() => { newChat(); }} style={s.newChatBtn}>
@@ -565,7 +586,14 @@ const s = StyleSheet.create({
   msgUserText: { color: '#fff', fontSize: 14, lineHeight: 20 },
   msgAiWrap: { alignSelf: 'flex-start', maxWidth: '95%', marginTop: 14 },
   msgAi: { paddingHorizontal: 0, paddingVertical: 6, marginTop: 4 },
-  msgAiText: { color: theme.colors.brand, fontSize: 15, lineHeight: 22 },
+  msgAiText: { color: '#1a1915', fontSize: 15.5, lineHeight: 24, fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'Georgia, serif' }) },
+  artifactCard: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, backgroundColor: '#faf9f5', borderWidth: 1, borderColor: '#e8e5dc', borderRadius: 14, padding: 12 },
+  artifactIcon: { width: 40, height: 48, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e8e5dc', alignItems: 'center', justifyContent: 'center' },
+  artifactName: { color: theme.colors.brand, fontWeight: '600', fontSize: 13.5 },
+  artifactSub: { color: theme.colors.muted, fontSize: 11.5, marginTop: 2 },
+  artifactBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e8e5dc', alignItems: 'center', justifyContent: 'center' },
+  sentChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 10, backgroundColor: '#EDF7EE', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  sentChipText: { color: '#16a34a', fontSize: 11.5, fontWeight: '600' },
   aiHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   aiName: { color: theme.colors.brand, fontSize: 13, letterSpacing: 0.2, fontWeight: '500' },
   aiDisclaimer: { color: theme.colors.muted, fontSize: 10, marginTop: 8, fontStyle: 'italic' },
@@ -582,9 +610,9 @@ const s = StyleSheet.create({
   sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.colors.brand, alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: theme.colors.card, borderWidth: 1, borderColor: theme.colors.border },
   // Modal
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', flexDirection: 'row' },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  sheet: { backgroundColor: theme.colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%' },
+  sheet: { backgroundColor: '#faf9f5', width: '84%', height: '100%', borderTopRightRadius: 20, borderBottomRightRadius: 20 },
   handle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: theme.colors.borderStrong, marginTop: 8 },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 8 },
   sheetTitle: { color: theme.colors.brand, fontSize: 18, fontWeight: '500' },

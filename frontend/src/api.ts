@@ -186,6 +186,11 @@ export const api = {
     request('/scanner/annotate', { method: 'POST', body: JSON.stringify(body) }),
   scannerSignImage: (body: { image_base64: string; signature: any; x: number; y: number; w: number }) =>
     request('/scanner/sign-image', { method: 'POST', body: JSON.stringify(body) }),
+  downloadsImport: (body: { name: string; file_base64: string; mime: string }) =>
+    request('/downloads/import', { method: 'POST', body: JSON.stringify(body) }),
+  viewerExplain: (body: { image_base64: string; bbox: number[] }) =>
+    request('/viewer/explain', { method: 'POST', body: JSON.stringify(body) }),
+  deleteDocument: (id: string) => request(`/documents/${id}`, { method: 'DELETE' }),
   scannerCreatePdf: (images: string[], name?: string) =>
     request('/scanner/create-pdf', { method: 'POST', body: JSON.stringify({ images, name }) }),
   editorInvite: (body: { document_id: string; email: string; permission: string }) =>
