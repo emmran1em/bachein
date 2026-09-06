@@ -173,7 +173,7 @@ export default function Home() {
             {recentEdited.length > 0 && (
               <Section title="Your documents" action="See all" onAction={() => router.push('/(tabs)/received')} testID="section-sent">
                 {recentEdited.map((d: any) => (
-                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} onLongPress={() => setDocAction(d)} />
+                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push({ pathname: '/viewer', params: { url: `${API_BASE}/documents/${d.id}/signed-pdf`, name: d.title } })} onLongPress={() => setDocAction(d)} />
                 ))}
               </Section>
             )}
@@ -181,7 +181,7 @@ export default function Home() {
             {pending.length > 0 && (
               <Section title="Pending signatures" testID="section-pending">
                 {pending.map((d: any) => (
-                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push(`/document/${d.id}`)} onLongPress={() => setDocAction(d)} />
+                  <RowCard key={d.id} item={d} kind="sent" onPress={() => router.push({ pathname: '/viewer', params: { url: `${API_BASE}/documents/${d.id}/signed-pdf`, name: d.title } })} onLongPress={() => setDocAction(d)} />
                 ))}
               </Section>
             )}
@@ -189,7 +189,7 @@ export default function Home() {
             {signed.length > 0 && (
               <Section title="Recently signed" action="Open Vault" onAction={() => router.push('/(tabs)/vault')} testID="section-signed">
                 {signed.map((d: any) => (
-                  <RowCard key={d.id} item={d} kind="signed" onPress={() => router.push(`/document/${d.id}`)} onLongPress={() => setDocAction(d)} />
+                  <RowCard key={d.id} item={d} kind="signed" onPress={() => router.push({ pathname: '/viewer', params: { url: `${API_BASE}/documents/${d.id}/signed-pdf`, name: d.title } })} onLongPress={() => setDocAction(d)} />
                 ))}
               </Section>
             )}
@@ -263,6 +263,14 @@ export default function Home() {
         <Pressable style={ss.actionOverlay} onPress={() => setDocAction(null)}>
           <View style={ss.actionSheet}>
             <Text style={ss.actionTitle} numberOfLines={1}>{docAction?.title}</Text>
+            <Pressable
+              testID="doc-action-details"
+              style={ss.actionRow}
+              onPress={() => { const d = docAction; setDocAction(null); router.push(`/document/${d.id}`); }}
+            >
+              <Ionicons name="information-circle-outline" size={19} color={theme.colors.brand} />
+              <Text style={ss.actionText}>Details & status</Text>
+            </Pressable>
             <Pressable
               testID="doc-action-share"
               style={ss.actionRow}

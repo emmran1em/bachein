@@ -481,11 +481,25 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         if body.quick_action and body.quick_action in QUICK_ACTIONS:
             prompt = QUICK_ACTIONS[body.quick_action].replace("{text}", text)
 
-        # Attach document context (extracted text is expected client-side already)
+        # Attach document context (inline extracted text and/or RAG retrieval from ingested docs)
         if body.attachments:
             ctx = "\n\n".join([f"[{a.get('name','file')}]\n{a.get('extracted_text','')}" for a in body.attachments if a.get("extracted_text")])
             if ctx:
                 prompt = f"[Attached documents:]\n{ctx[:15000]}\n\nUSER: {prompt}"
+        # RAG: retrieve relevant sections of docs ingested into this conversation
+        try:
+            has_docs = await db.ai_documents.find_one({"conv_id": conv_id, "user_id": user["id"]})
+            if has_docs:
+                from doc_intel import rag as _rag
+                hits = _rag.query(user["id"], conv_id, text, k=6)
+                if hits:
+                    sections = "\n\n".join(f"[{h['file_name']} — section {h['chunk_id'] + 1}]\n{h['text']}" for h in hits)
+                    prompt = (
+                        f"[RELEVANT SECTIONS FROM THE USER'S UPLOADED DOCUMENT(S) — answer strictly from these when the question is about the document]:\n"
+                        f"{sections[:14000]}\n\nUSER: {prompt}"
+                    )
+        except Exception:
+            pass
 
         # Persist user message
         user_msg = {
@@ -548,7 +562,10 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
                     else:
                         break
                 did = await _register_download(user["id"], a_title, "droit-doc", pdf.tobytes())
-                artifact = {"download_id": did, "name": a_title}
+                # version chain within this conversation + keep source text for DOCX/HTML export
+                ver = 1 + await db.downloads.count_documents({"user_id": user["id"], "kind": "droit-doc", "conv_id": conv_id})
+                await db.downloads.update_one({"id": did}, {"$set": {"content_text": a_body[:200000], "conv_id": conv_id, "version": ver}})
+                artifact = {"download_id": did, "name": a_title, "version": ver}
             except Exception:
                 artifact = None
         sent_to = None
@@ -1151,6 +1168,100 @@ def build_ai_router(db, get_current_user, get_user_flex=None):
         pdf_bytes = render_evaluated_booklet(p.get("answers") or {}, p.get("params", {}))
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"inline; filename=answer-booklet-{ap_id}.pdf"})
+
+    # ══════════════ Document Intelligence — ingest + export ══════════════
+    @router.post("/ingest")
+    async def ingest_document(
+        file: UploadFile = File(...),
+        conversation_id: Optional[str] = Form(None),
+        user=Depends(get_current_user),
+    ):
+        """Upload a document into an AI conversation: extract (PyMuPDF → Textract fallback), chunk, index for RAG."""
+        from doc_intel import extract_any, chunk_text, rag as _rag
+        data = await file.read()
+        if len(data) > 25 * 1024 * 1024:
+            raise HTTPException(400, "File too large (max 25 MB)")
+        conv_id = conversation_id
+        if not conv_id:
+            conv_id = str(uuid.uuid4())
+            await db.ai_conversations.insert_one({
+                "id": conv_id, "user_id": user["id"], "title": (file.filename or "Document")[:60],
+                "pinned": False, "created_at": _now_iso(), "updated_at": _now_iso(),
+            })
+        try:
+            text_out, method = extract_any(data, file.filename or "file.pdf")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not text_out.strip():
+            # Vision-LLM OCR fallback (Textract unavailable / returned nothing)
+            try:
+                import fitz as _fitz
+                name_l = (file.filename or "").lower()
+                if name_l.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    imgs = [base64.b64encode(data).decode()]
+                else:
+                    _pdf = _fitz.open(stream=data, filetype="pdf")
+                    imgs = [base64.b64encode(pg.get_pixmap(dpi=140).tobytes("jpeg")).decode() for pg in list(_pdf)[:8]]
+                from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+                ocr_chat = LlmChat(
+                    api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
+                    session_id=f"ingest-ocr-{user['id'][:8]}",
+                    system_message="Transcribe ALL text in the given document image(s) exactly, preserving structure. Output plain text only.",
+                ).with_model("gemini", "gemini-3.1-pro-preview")
+                pieces = []
+                for im in imgs:
+                    t = await ocr_chat.send_message(UserMessage(text="Transcribe this page.", file_contents=[ImageContent(image_base64=im)]))
+                    pieces.append(t or "")
+                text_out = "\n\n".join(pieces).strip()
+                method = "vision-llm-ocr"
+            except Exception:
+                pass
+        if not text_out.strip():
+            raise HTTPException(400, "We could not read any text from this document. Try another version or format.")
+        chunks = chunk_text(text_out)
+        doc_id = str(uuid.uuid4())
+        try:
+            _rag.add(user["id"], conv_id, doc_id, file.filename or "document", chunks)
+        except Exception:
+            pass
+        await db.ai_documents.insert_one({
+            "id": doc_id, "user_id": user["id"], "conv_id": conv_id,
+            "file_name": file.filename or "document", "method": method,
+            "chars": len(text_out), "chunks": len(chunks),
+            "text_head": text_out[:12000], "created_at": _now_iso(),
+        })
+        return {
+            "document_id": doc_id, "conversation_id": conv_id,
+            "file_name": file.filename, "method": method,
+            "chars": len(text_out), "chunks": len(chunks),
+        }
+
+    @router.get("/export/{download_id}")
+    async def export_download(download_id: str, fmt: str = "docx", user=Depends(user_dep_flex)):
+        """Export a Droit-generated document as DOCX or HTML (PDF already stored)."""
+        from doc_intel import text_to_docx, text_to_html
+        from fastapi.responses import Response
+        dl = await db.downloads.find_one({"id": download_id, "user_id": user["id"]})
+        if not dl:
+            raise HTTPException(404, "Not found")
+        body_txt = dl.get("content_text") or ""
+        if not body_txt:
+            # fall back to extracting text from the stored PDF
+            try:
+                import fitz
+                pdf = fitz.open(stream=base64.b64decode(dl["pdf_b64"]), filetype="pdf")
+                body_txt = "\n\n".join(pg.get_text() for pg in pdf)
+            except Exception:
+                raise HTTPException(400, "This download cannot be exported")
+        title = dl.get("name", "Document")
+        if fmt == "html":
+            return Response(content=text_to_html(title, body_txt), media_type="text/html",
+                            headers={"Content-Disposition": f'attachment; filename="{title}.html"'})
+        return Response(
+            content=text_to_docx(title, body_txt),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{title}.docx"'},
+        )
 
     # ══════════════ Voice agent — ElevenLabs STT ↔ LLM ↔ TTS ══════════════
     _EL_KEY = os.environ.get("ELEVENLABS_API_KEY", "")

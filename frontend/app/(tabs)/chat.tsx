@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
-import { api } from '@/src/api';
+import { api, uploadForm, getToken, API_BASE } from '@/src/api';
 import { sharePdf } from '@/src/share';
 import DotsLoader from '@/src/components/DotsLoader';
 import BacheinAiLogo from '@/src/components/BacheinAiLogo';
@@ -215,13 +215,34 @@ export default function AiWorkspace() {
   };
   const stopVoice = () => { try { recogRef.current?.stop(); } catch {}; setVoiceOn(false); };
 
+  const [ingesting, setIngesting] = useState(false);
   const pickAttachment = async () => {
     try {
-      const r = await DocumentPicker.getDocumentAsync({ type: ['image/*', 'application/pdf', 'text/*', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], multiple: false, copyToCacheDirectory: true });
+      const r = await DocumentPicker.getDocumentAsync({ type: ['image/*', 'application/pdf', 'text/*', 'text/csv', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], multiple: false, copyToCacheDirectory: true });
       if (r.canceled) return;
       const f = r.assets?.[0]; if (!f) return;
-      setInput((prev) => (prev ? prev + '\n' : '') + `[Attached: ${f.name}] `);
+      setIngesting(true);
+      setMessages((m) => [...m, { role: 'assistant', content: `Reading ${f.name}…`, ts: new Date().toISOString(), transient: true }]);
+      try {
+        const res: any = await uploadForm('/aiw/ingest', { uri: f.uri, name: f.name || 'document.pdf', type: f.mimeType || 'application/pdf' }, activeConv ? { conversation_id: activeConv } : {});
+        setActiveConv(res.conversation_id);
+        setMessages((m) => [...m.filter((x: any) => !x.transient), {
+          role: 'assistant', ts: new Date().toISOString(),
+          content: `📎 **${res.file_name}** processed ✓ — ${res.chunks} sections indexed (${res.method === 'textract' || res.method === 'textract-image' ? 'OCR via Textract' : res.method === 'vision-llm-ocr' ? 'OCR via AI vision' : 'text extracted'}). Ask me anything about it — explain, summarize, find clauses, or request modifications.`,
+        }]);
+      } catch (e: any) {
+        setMessages((m) => [...m.filter((x: any) => !x.transient), { role: 'assistant', content: `We could not process this document (${e.message || 'error'}). Please try another version or a supported format.`, ts: new Date().toISOString() }]);
+      } finally { setIngesting(false); }
     } catch (e) { /* ignore */ }
+  };
+
+  const exportArtifact = async (m: any, fmt: 'docx' | 'html') => {
+    try {
+      const token = await getToken();
+      const url = `${API_BASE}/aiw/export/${m.artifact.download_id}?fmt=${fmt}&token=${token}`;
+      if (Platform.OS === 'web' && typeof window !== 'undefined') { window.open(url, '_blank'); }
+      else { await sharePdf(url, `${m.artifact.name}.${fmt}`); }
+    } catch {}
   };
 
   const savePinned = async (id: string, pinned: boolean) => {
@@ -322,7 +343,11 @@ export default function AiWorkspace() {
                           <View style={s.artifactIcon}><Ionicons name="document-text" size={20} color={theme.colors.brand} /></View>
                           <View style={{ flex: 1 }}>
                             <Text style={s.artifactName} numberOfLines={1}>{m.artifact.name}</Text>
-                            <Text style={s.artifactSub}>Document · PDF</Text>
+                            <Text style={s.artifactSub}>Document · PDF{m.artifact.version ? ` · Version ${m.artifact.version}` : ''}</Text>
+                            <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+                              <Pressable testID="artifact-docx" onPress={() => exportArtifact(m, 'docx')} style={s.fmtChip}><Text style={s.fmtChipText}>DOCX</Text></Pressable>
+                              <Pressable testID="artifact-html" onPress={() => exportArtifact(m, 'html')} style={s.fmtChip}><Text style={s.fmtChipText}>HTML</Text></Pressable>
+                            </View>
                           </View>
                           <Pressable testID="artifact-view" onPress={() => router.push({ pathname: '/viewer', params: { url: api.downloadFileUrl(m.artifact.download_id), name: m.artifact.name } })} style={s.artifactBtn}>
                             <Ionicons name="eye-outline" size={17} color={theme.colors.brand} />
@@ -372,8 +397,8 @@ export default function AiWorkspace() {
               multiline
             />
             <View style={s.composerRow}>
-              <Pressable testID="ai-attach-btn" onPress={pickAttachment} style={s.micBtn}>
-                <Ionicons name="attach" size={16} color={theme.colors.brand} />
+              <Pressable testID="ai-attach-btn" onPress={pickAttachment} style={s.micBtn} disabled={ingesting}>
+                {ingesting ? <ActivityIndicator size="small" color={theme.colors.brand} /> : <Ionicons name="attach" size={16} color={theme.colors.brand} />}
               </Pressable>
               <Pressable testID="ai-provider-btn" onPress={() => setShowProviderPicker(true)} style={s.modelChipInline}>
                 <View style={s.modelDot} />
@@ -594,6 +619,8 @@ const s = StyleSheet.create({
   artifactBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e8e5dc', alignItems: 'center', justifyContent: 'center' },
   sentChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 10, backgroundColor: '#EDF7EE', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
   sentChipText: { color: '#16a34a', fontSize: 11.5, fontWeight: '600' },
+  fmtChip: { borderWidth: 1, borderColor: '#e8e5dc', backgroundColor: '#fff', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  fmtChipText: { color: theme.colors.brand, fontSize: 10.5, fontWeight: '700' },
   aiHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   aiName: { color: theme.colors.brand, fontSize: 13, letterSpacing: 0.2, fontWeight: '500' },
   aiDisclaimer: { color: theme.colors.muted, fontSize: 10, marginTop: 8, fontStyle: 'italic' },

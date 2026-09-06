@@ -1,0 +1,50 @@
+{
+  "summary": "Iter 15 focused batch — Backend 4/4 pytest PASS, Frontend 6/6 review items PASS. (1) BUG FIX verified: created a fresh unsigned Normal PDF doc (Alice → Bob) and GET /api/documents/{id}/signed-pdf returned 200 with a valid %PDF (>500 bytes) — no more 400 for unsigned docs. (2) POST /api/aiw/ingest with a small text PDF returned 200 with method='pymupdf', chunks=1, chars>100 and a conversation_id. (3) POST /api/aiw/chat with 'What is the termination notice period in my uploaded document?' returned a reply that references '30 day' / 'termination' from the ingested doc (RAG via ChromaDB or keyword fallback both acceptable — worked on first hit here). (4) POST /api/aiw/chat 'Generate ... as a PDF' returned artifact with download_id + version=1; GET /api/aiw/export/{did}?fmt=docx returned PK zip (>500 bytes), ?fmt=html returned <!DOCTYPE, and ?fmt=html&token= (query-auth) also returned <!DOCTYPE. FRONTEND (mobile 390x844, alice@bachein.com / Test1234!): (a) Login flow works after fill email/password → get_by_text('Sign in').click(force=True) twice. (b) Home → clicked a row under 'Recently signed' (home-row-a75761b0…) → viewer-screen opened, counter '1 / 2' visible, page image rendered (4 <img> tags), viewer-back returned to intact Home. (c) home-row-more-{id} (⋮) opens the action sheet with doc-action-details + doc-action-share + doc-action-delete — 'Details & status' correctly routes to /document/{id} showing full Status Tracker (Delivered/Opened/OTP/Face/Voice/Signed). (d) AI tab → ai-attach-btn → filechooser → uploaded /tmp/iter15_upload.txt → assistant message '📎 **iter15_upload.txt** processed ✓ — 1 sections indexed (text extracted).' appeared in ~2s. (e) Same conversation: sent 'Generate a short two-line note titled TEST_iter15_chips as a PDF' → droit-artifact card appeared in ~2s with 'Document · PDF · Version 1' + artifact-docx + artifact-html + artifact-view. (f) /create/normal?category=Normal+PDF → generate-btn (prompt='Two-line thank you note titled TEST_iter15_normal') → save-doc-btn appeared in ~4s → clicked Save → router.replace to /viewer with url=/api/documents/{id}/signed-pdf, counter '1 / 1' rendered — NOT document detail. ONE OBSERVATION (not a bug): during the RAG follow-up prompt in the frontend AI tab, the daily-AI-quota (free tier) had been exhausted by earlier test iterations and Droit replied '⚠️ Daily AI quota reached. Add your own API key (BYO)…' — the RAG functionality itself is verified working by the backend pytest RAG test on the same account/conversation model minutes earlier; this is EXPECTED quota gating, not a defect. React-native-web deprecation warnings still present (shadow*/textShadow*/pointerEvents/resizeMode) — non-blocking, carry-over from iter14.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "AI tab RAG follow-up on ingested document",
+        "issue": "Daily AI quota (free tier) can be exhausted quickly during testing → Droit replies with quota-reached banner instead of the RAG answer. Not a defect (quota gate is intentional and the backend RAG works — verified in pytest), but consider showing a subtle quota indicator BEFORE sending so users don't lose context, or exempt ingested-doc RAG questions from the daily quota (charge only when it hits the LLM).",
+        "affected_testIDs": ["ai-send-btn", "droit-artifact"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "Multiple screens (carry-over from iter14)", "issue": "react-native-web deprecation warnings still emitted on every render: 'shadow*' → boxShadow, 'textShadow*' → textShadow, 'props.pointerEvents' → style.pointerEvents, Image 'style.resizeMode' → props.resizeMode. Non-blocking, but should be migrated."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter15_docintel_signedpdf.py",
+    "/app/test_reports/pytest/iter15_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: consider showing a small quota-remaining indicator in the AI chat header (e.g., 'X messages left today') so quota-reached surprises are avoided; or exempt RAG-follow-up messages on ingested docs from the daily quota.",
+    "LOW: migrate deprecated RN style props (shadow*→boxShadow, textShadow*→textShadow, pointerEvents prop→style.pointerEvents, Image style.resizeMode→props.resizeMode)."
+  ],
+  "critical_code_review_comments": [
+    "server.py get_signed_pdf (line 1195): watermark now correctly branches on signature_status ('signed by …' vs 'created …') and the signature-embed try/except is properly guarded, so unsigned docs return a valid PDF instead of 400. Good fix.",
+    "ai_workspace.py /ingest (line 1173): the PyMuPDF→vision-LLM-OCR fallback chain is robust; the vision-LLM branch page-caps at 8 which is sensible. Consider surfacing method='vision-llm-ocr' back to the frontend so the '📎 processed ✓' toast can say 'OCR via vision-LLM' instead of falling through to the else branch that only names textract.",
+    "chat.tsx (line 231): '📎 processed ✓' message ternary only branches on 'textract'|'textract-image' vs 'text extracted' — 'vision-llm-ocr' will read as 'text extracted' which is misleading; add an explicit branch for 'vision-llm-ocr'.",
+    "ai_workspace.py /chat (line 566): version counter uses count_documents on kind='droit-doc' + conv_id — correct scoping. Consider indexing (user_id, conv_id, kind) if downloads collection grows.",
+    "aiw/export uses user_dep_flex (token-in-query allowed) — good for mobile Share, matches downloads pattern."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter15_docintel_signedpdf.py (NEW — 4 tests)",
+    "/app/test_reports/pytest/iter15_results.xml (NEW — 4 passed)",
+    "/app/test_reports/iteration_15.json (this report)"
+  ],
+  "success_rate": {
+    "backend": "100% (4/4 — unsigned signed-pdf returns valid PDF, ingest text-pdf→pymupdf, RAG chat references doc, artifact docx=PK + html=<!DOCTYPE incl. token-in-query auth)",
+    "frontend": "100% (6/6 — login OK, home row→viewer with page counter, home-row-more→action sheet with Details & status routing to /document/{id}, AI attach→ingest processed message, artifact card with Version + DOCX + HTML chips, Draft with AI→Save→/viewer A4 pager)"
+  },
+  "seed_data_creation": "Created via test: 1 unsigned Normal PDF (TEST_iter15_unsigned to bob), 1 ai_document (TEST INGEST DOCUMENT — text PDF ingested), 1 conversation with 2 chat turns (RAG question + artifact prompt), 1 droit-doc download (TEST_iter15_export via pytest), 1 more (TEST_iter15_chips via UI), 1 saved doc via Draft-with-AI (title auto-generated from Gemini). No pre-existing data modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter 15 tests file: /app/backend/tests/test_iter15_docintel_signedpdf.py. Auth field = 'token'. /api/documents/{id}/signed-pdf now works for unsigned docs (returns %PDF regardless of signature_status). /api/aiw/ingest accepts multipart file + optional conversation_id form field, returns {document_id, conversation_id, file_name, method, chars, chunks} — method values seen: 'pymupdf' (text PDF), 'vision-llm-ocr' (fallback). /api/aiw/export/{download_id}?fmt=docx|html supports header OR ?token=… query auth (user_dep_flex). Droit artifact response shape: {artifact:{download_id, name, version}}. Frontend attach flow in chat.tsx uses expect_file_chooser() — first click on [data-testid=ai-attach-btn] opens the file picker; setting files triggers ingest; assistant message contains 'processed ✓' and 'N sections indexed'. Home sections (section-received/-sent/-pending/-signed): only 'section-received' unsigned+secure rows route to /receive/{id}; all other rows route to /viewer with signed-pdf url — that's by-design, matches problem statement. home-row-more-{id} (⋮ Pressable) works reliably on web (no long-press needed) and opens the action sheet Modal with doc-action-details/-share/-delete testIDs. Draft-with-AI: /create/normal?category=… → prompt textarea + generate-btn → wait for save-doc-btn (~4-30s on Gemini) → click Save → router.replace to /viewer. NOTE: free-tier daily AI quota exhausts fast during repeated testing — Droit replies with 'Daily AI quota reached' when exceeded; RAG functionality is proven via backend pytest, not a defect.",
+  "rca_of_issue": "N/A — all target items PASS. RCA of the BUG-FIX itself (main-agent already fixed): previously GET /documents/{id}/signed-pdf assumed doc.signature_status=='signed' and dereferenced signed_at / recipient signature fields, raising and returning 400 for unsigned docs. Fix: watermark now branches on status, and the signature-embed block is fully wrapped in try/except so absent sender/receiver signatures no longer abort the render — signed docs still get the two signature blocks appended to the last page, unsigned docs get the plain PDF with a 'created YYYY-MM-DD' watermark. Verified by TestUnsignedSignedPdf.test_create_unsigned_and_get_signed_pdf_returns_valid_pdf and by clicking a row in the Home 'Recently signed' section which now consistently opens the viewer with a rendered page image."
+}

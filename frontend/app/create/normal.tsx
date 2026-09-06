@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '@/src/theme';
-import { api } from '@/src/api';
+import { api, API_BASE } from '@/src/api';
 import TemplatePicker from '@/src/components/TemplatePicker';
 
 const SUBTYPES = ['Question Paper', 'Report', 'Notes', 'Presentation', 'Assignment', 'Summary'];
@@ -40,7 +40,7 @@ export default function NormalCreate() {
         mode: 'normal',
         content: result.content,
       });
-      router.replace(`/document/${doc.id}`);
+      router.replace({ pathname: '/viewer', params: { url: `${API_BASE}/documents/${doc.id}/signed-pdf`, name: result.title } });
     } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
   };
 

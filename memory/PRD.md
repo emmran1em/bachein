@@ -87,3 +87,18 @@
 - Viewer A4 smoothness pass + lock/highlight tools in viewer
 - Compressor upgrade w/ Ghostscript (gs not installed in pod)
 - Google Drive local-first sync, GitHub connector OAuth flow
+
+## Iteration 15 — Document Intelligence + viewer fix (testing-agent all green)
+- **BUG FIX**: unsigned docs 400'd on /documents/{id}/signed-pdf → now renders PDF for any doc (signatures embedded only when signed). Home rows open horizontal A4 viewer directly; Details & status via ⋮/long-press sheet
+- **Draft with AI** → Save routes to /viewer (A4 pager)
+- **backend/doc_intel.py**: extract_any (PyMuPDF → Textract fallback → NOTE: user AWS acct lacks Textract subscription (SubscriptionRequiredException) so Gemini vision-LLM OCR fallback added in ingest route), chunk_text, RagStore (ChromaDB PersistentClient /app/backend/chroma_db + keyword fallback, swappable), text_to_docx (python-docx), text_to_html
+- **/api/aiw/ingest**: multipart upload → extract → chunk → RAG index → db.ai_documents; chat retrieves top-6 RAG sections when conv has ingested docs ("According to your document" behavior in system prompt)
+- **Artifacts versioned** per conversation (Version N badge) + content_text stored; **/api/aiw/export/{id}?fmt=docx|html** (token query auth ok)
+- **Chat attach button now really ingests** (spinner, "processed ✓ — N sections indexed" message, error message on unsupported)
+- chromadb + python-docx in requirements.txt
+
+## Still pending (be honest with user)
+- CBSE official-source question-paper knowledge base (fetch/ingest cbse.gov.in + cbseacademic sample papers/archive/curriculum + NCERT/ePathshala; blueprint → generate → validate) — large ingestion pipeline, NOT started
+- Accept/Reject per-change review UI (versions exist; diff review UI pending)
+- Google Drive sync, GitHub OAuth flow, scanner Pages-flow rename-at-top, Ghostscript compression (gs not in pod)
+- Textract activates automatically once user's AWS account billing/subscription is active — code already wired

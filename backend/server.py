@@ -1200,9 +1200,10 @@ async def get_signed_pdf(doc_id: str, user=Depends(get_user_from_query_or_header
         raise HTTPException(404, "Not found")
     if doc["sender_id"] != user["id"] and doc.get("recipient_email") != user["email"]:
         raise HTTPException(403, "Forbidden")
-    if doc.get("signature_status") != "signed":
-        raise HTTPException(400, "Document not yet signed")
-    wm = f"signed by {doc.get('recipient_email','')} • {doc.get('signed_at','')[:19]}"
+    if doc.get("signature_status") == "signed":
+        wm = f"signed by {doc.get('recipient_email','')} • {doc.get('signed_at','')[:10]}"
+    else:
+        wm = f"created {doc.get('created_at','')[:10]}"
     pdf = text_to_pdf(doc["title"], doc.get("content", ""), watermark=wm)
 
     # ── Embed signature blocks on the last page (or a new page if no room) ──
